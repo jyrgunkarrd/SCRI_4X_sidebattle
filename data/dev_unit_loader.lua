@@ -49,8 +49,21 @@ return
 
         },
         targ_h = 1,
-        targ_w = 3,
-        pop = 4,
+        targ_w = 6,
+        pop = 1,
+
+    },
+
+    {
+
+        unitid = { 
+
+        "en_forg",
+
+        },
+        targ_h = 1,
+        targ_w = 6,
+        pop = 2,
 
     },
 
@@ -62,7 +75,7 @@ return
 
         },
         targ_h = 1,
-        targ_w = 4,
+        targ_w = 5,
         pop = 1,
 
     },

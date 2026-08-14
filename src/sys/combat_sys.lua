@@ -138,13 +138,7 @@ function CombatSystem:getRangedHitCount(unit, movementCost)
 end
 
 function CombatSystem:isUnitEngaged(unit)
-    if not unit then
-        return false
-    end
-    if self.enemyArenaSystem:isEnemy(unit) then
-        return #self.enemyArenaSystem:getEngagers(unit) > 0
-    end
-    return unit.engagedWith ~= nil
+    return self.enemyArenaSystem:isEngaged(unit)
 end
 
 function CombatSystem:getCellRange(attacker, target)
@@ -249,7 +243,7 @@ function CombatSystem:canRangedAttack(attacker, target)
     return damage ~= nil and damage > 0 and hitChance ~= nil
 end
 
-function CombatSystem:getRangedAttackPreview(attacker, target)
+function CombatSystem:getRangedAttackPreview(attacker, target, movementCost)
     if not self:canRangedAttack(attacker, target) then
         return nil
     end
@@ -264,7 +258,7 @@ function CombatSystem:getRangedAttackPreview(attacker, target)
         targetArmor,
         penetration
     )
-    local availableHits = self:getRangedHitCount(attacker)
+    local availableHits = self:getRangedHitCount(attacker, movementCost)
     local currentHP = math.max(0, tonumber(target.hp) or 0)
     local hitsToDefeat = math.max(1, math.ceil(currentHP / damagePerHit))
     local hitCount = math.min(availableHits, hitsToDefeat)
@@ -357,16 +351,13 @@ end
 
 function CombatSystem:_defeatUnit(unit)
     unit.hp = 0
-    if self.enemyArenaSystem:isEnemy(unit) then
-        local engagers = self.enemyArenaSystem:getEngagers(unit)
-        for _, engager in ipairs(engagers) do
-            engager.engagedWith = nil
-            engager.flanking = false
-        end
-        unit.engagedBy = {}
-    else
-        self.enemyArenaSystem:disengage(unit)
+    self.enemyArenaSystem:disengage(unit)
+    local engagers = self.enemyArenaSystem:getEngagers(unit)
+    for _, engager in ipairs(engagers) do
+        engager.engagedWith = nil
+        engager.flanking = false
     end
+    unit.engagedBy = {}
     self.unitSystem:remove(unit)
 end
 

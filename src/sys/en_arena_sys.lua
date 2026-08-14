@@ -40,14 +40,40 @@ function EnemyArenaSystem:isOccupied(enemy)
     return self:getEngagedSize(enemy) >= self:getSize(enemy)
 end
 
-function EnemyArenaSystem:canEngage(enemy)
-    return self:isEnemy(enemy)
-        and #self:getEngagers(enemy) < self:getSize(enemy)
+function EnemyArenaSystem:canEngage(unit)
+    return unit ~= nil
+        and (unit.hp or 0) > 0
+        and #self:getEngagers(unit) < self:getSize(unit)
 end
 
-function EnemyArenaSystem:isAtEngagementCapacity(enemy)
-    return self:isEnemy(enemy)
-        and #self:getEngagers(enemy) >= self:getSize(enemy)
+function EnemyArenaSystem:isAtEngagementCapacity(unit)
+    return unit ~= nil
+        and #self:getEngagers(unit) >= self:getSize(unit)
+end
+
+function EnemyArenaSystem:isEngaged(unit)
+    return unit ~= nil
+        and (unit.engagedWith ~= nil or #self:getEngagers(unit) > 0)
+end
+
+function EnemyArenaSystem:getEngagedOpponents(unit)
+    local opponents = {}
+    if not unit then
+        return opponents
+    end
+    if unit.engagedWith then
+        opponents[#opponents + 1] = unit.engagedWith
+    end
+    for _, engager in ipairs(self:getEngagers(unit)) do
+        opponents[#opponents + 1] = engager
+    end
+    return opponents
+end
+
+function EnemyArenaSystem:getPrimaryOpponent(unit)
+    local opponents = self:getEngagedOpponents(unit)
+    table.sort(opponents, instanceOrder)
+    return opponents[1]
 end
 
 function EnemyArenaSystem:disengage(unit)
@@ -67,17 +93,19 @@ function EnemyArenaSystem:disengage(unit)
     unit.flanking = false
 end
 
-function EnemyArenaSystem:engage(unit, enemy)
-    if self:isEnemy(unit) or not self:canEngage(enemy)
-        or unit.targW ~= enemy.targW or unit.targH ~= enemy.targH then
+function EnemyArenaSystem:engage(unit, target)
+    if not unit or not target or unit == target
+        or self:isEnemy(unit) == self:isEnemy(target)
+        or not self:canEngage(target)
+        or unit.targW ~= target.targW or unit.targH ~= target.targH then
         return false
     end
 
-    local isFlanking = self:isOccupied(enemy)
+    local isFlanking = self:isOccupied(target)
     self:disengage(unit)
-    local engagers = self:getEngagers(enemy)
+    local engagers = self:getEngagers(target)
     engagers[#engagers + 1] = unit
-    unit.engagedWith = enemy
+    unit.engagedWith = target
     unit.flanking = isFlanking
     return true
 end
@@ -86,13 +114,9 @@ function EnemyArenaSystem:isFlanking(unit)
     return unit.flanking == true and unit.engagedWith ~= nil
 end
 
-function EnemyArenaSystem:isFlanked(enemy)
-    if not self:isEnemy(enemy) then
-        return false
-    end
-
-    for _, unit in ipairs(self:getEngagers(enemy)) do
-        if self:isFlanking(unit) then
+function EnemyArenaSystem:isFlanked(unit)
+    for _, engager in ipairs(self:getEngagers(unit)) do
+        if self:isFlanking(engager) then
             return true
         end
     end
@@ -108,6 +132,46 @@ function EnemyArenaSystem:getEnemiesAt(units, targW, targH)
         end
     end
     return enemies
+end
+
+function EnemyArenaSystem:getPlayersAt(units, targW, targH)
+    local players = {}
+    for _, unit in ipairs(units) do
+        if not self:isEnemy(unit)
+            and (unit.hp or 0) > 0
+            and unit.targW == targW
+            and unit.targH == targH then
+            players[#players + 1] = unit
+        end
+    end
+    return players
+end
+
+function EnemyArenaSystem:getEngageablePlayersAt(units, targW, targH)
+    local players = {}
+    for _, unit in ipairs(self:getPlayersAt(units, targW, targH)) do
+        if self:canEngage(unit) then
+            players[#players + 1] = unit
+        end
+    end
+    return players
+end
+
+function EnemyArenaSystem:cellHasBlockingPlayer(units, targW, targH)
+    for _, player in ipairs(self:getPlayersAt(units, targW, targH)) do
+        if not self:isOccupied(player) then
+            return true
+        end
+    end
+    return false
+end
+
+function EnemyArenaSystem:engageEnemyWithPlayer(enemy, player)
+    if not self:isEnemy(enemy) or self:isEnemy(player)
+        or not self:canEngage(player) then
+        return false
+    end
+    return self:engage(enemy, player)
 end
 
 function EnemyArenaSystem:cellHasBlockingEnemy(units, targW, targH)
@@ -143,15 +207,22 @@ function EnemyArenaSystem:update(units)
         local key = cellKey(unit.targW, unit.targH)
         local cell = cells[key]
         if not cell then
-            cell = { players = {}, enemies = {}, flankers = {} }
+            cell = {
+                players = {},
+                enemies = {},
+                playerFlankers = {},
+                enemyFlankers = {},
+            }
             cells[key] = cell
         end
 
         local faction
-        if self:isEnemy(unit) then
-            faction = cell.enemies
+        if self:isFlanking(unit) and self:isEnemy(unit) then
+            faction = cell.enemyFlankers
         elseif self:isFlanking(unit) then
-            faction = cell.flankers
+            faction = cell.playerFlankers
+        elseif self:isEnemy(unit) then
+            faction = cell.enemies
         else
             faction = cell.players
         end
@@ -159,18 +230,24 @@ function EnemyArenaSystem:update(units)
     end
 
     for _, cell in pairs(cells) do
-        if #cell.enemies > 0 and (#cell.players > 0 or #cell.flankers > 0) then
-            if #cell.players > 0 then
-                self:_placeInHalf(cell.players, -1)
-            end
+        local playerSide = {}
+        for _, player in ipairs(cell.players) do
+            playerSide[#playerSide + 1] = player
+        end
+        for _, flanker in ipairs(cell.enemyFlankers) do
+            playerSide[#playerSide + 1] = flanker
+        end
 
-            local enemySide = {}
-            for _, enemy in ipairs(cell.enemies) do
-                enemySide[#enemySide + 1] = enemy
-            end
-            for _, flanker in ipairs(cell.flankers) do
-                enemySide[#enemySide + 1] = flanker
-            end
+        local enemySide = {}
+        for _, enemy in ipairs(cell.enemies) do
+            enemySide[#enemySide + 1] = enemy
+        end
+        for _, flanker in ipairs(cell.playerFlankers) do
+            enemySide[#enemySide + 1] = flanker
+        end
+
+        if #playerSide > 0 and #enemySide > 0 then
+            self:_placeInHalf(playerSide, -1)
             self:_placeInHalf(enemySide, 1)
         end
     end

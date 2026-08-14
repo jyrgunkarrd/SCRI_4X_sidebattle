@@ -21,6 +21,7 @@ return
             { select = "Popping smoke" },
 
         },
+        def_sfx = "fem", 
 
     },
 
@@ -53,6 +54,7 @@ return
             { select = "Fully functional" },
 
         },
+        def_sfx = "fem", 
 
     },    
 
@@ -78,6 +80,7 @@ return
             { select = "On station" },
 
         },
+        def_sfx = "expl", 
 
     }, 
 

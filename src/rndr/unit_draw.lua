@@ -203,6 +203,11 @@ end
 function UnitDraw:draw(units, hoveredUnit, overlays, excludedUnit, options)
     options = options or {}
     local orderedUnits = self:_orderedUnits(units)
+    local engagedFocusLookup = {}
+    for _, unit in ipairs(options.engagedFocusTargets or {}) do
+        engagedFocusLookup[unit] = true
+    end
+    local hasEngagedFocus = next(engagedFocusLookup) ~= nil
 
     for _, unit in ipairs(orderedUnits) do
         if unit ~= hoveredUnit and unit ~= excludedUnit then
@@ -211,12 +216,12 @@ function UnitDraw:draw(units, hoveredUnit, overlays, excludedUnit, options)
                 and unit.targH == hoveredUnit.targH
             local isEnemy = options.enemyArenaSystem
                 and options.enemyArenaSystem:isEnemy(unit)
-            local shouldDimForEngagement = options.engagedFocusTarget
+            local shouldDimForEngagement = hasEngagedFocus
                 and isEnemy
-                and unit ~= options.engagedFocusTarget
+                and not engagedFocusLookup[unit]
             local shouldDimForCapacity = options.dimUnavailableEngagements
                 and isEnemy
-                and unit ~= options.engagedFocusTarget
+                and not engagedFocusLookup[unit]
                 and options.enemyArenaSystem:isAtEngagementCapacity(unit)
             local shouldDim = shouldDimForEngagement
                 or shouldDimForCapacity

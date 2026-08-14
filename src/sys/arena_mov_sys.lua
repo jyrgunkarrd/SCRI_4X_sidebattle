@@ -31,7 +31,8 @@ function ArenaMovementSystem:setSelectedUnit(unit)
     self.hoveredDestination = nil
     self.hoveredEngagement = nil
 
-    if not unit or unit.engagedWith or unit.exhausted or self.movement
+    if not unit or self.enemyArenaSystem:isEngaged(unit)
+        or unit.exhausted or self.movement
         or unit.isEnemy == true or unit.definition.enemy == true then
         return
     end
@@ -156,7 +157,8 @@ function ArenaMovementSystem:clearHover()
 end
 
 function ArenaMovementSystem:moveSelectedToWorld(worldX, worldY, targetedEnemy)
-    if not self.selectedUnit or self.selectedUnit.engagedWith
+    if not self.selectedUnit
+        or self.enemyArenaSystem:isEngaged(self.selectedUnit)
         or self.selectedUnit.exhausted or self.movement
         or self.selectedUnit.isEnemy == true
         or self.selectedUnit.definition.enemy == true then

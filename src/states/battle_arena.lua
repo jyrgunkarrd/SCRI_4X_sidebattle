@@ -20,6 +20,7 @@ local ShoutText = require("src.rndr.shout_text")
 local TurnSystem = require("src.sys.turn_sys")
 local CombatSystem = require("src.sys.combat_sys")
 local AttackVFX = require("src.rndr.attack_vfx")
+local ArenaAISystem = require("src.sys.arena_ai_sys")
 
 local BattleArena = {}
 BattleArena.__index = BattleArena
@@ -85,6 +86,17 @@ function BattleArena:enter()
         unitSystem = self.unitSystem,
         enemyArenaSystem = self.enemyArenaSystem,
     })
+    self.arenaAISystem = ArenaAISystem.new(
+        self.arenaGrid,
+        self.unitSystem,
+        self.enemyArenaSystem,
+        self.combatSystem,
+        {
+            initialDelay = 1.2,
+            actionDelay = 0.18,
+            moveDuration = 0.22,
+        }
+    )
     self.unitDraw = UnitDraw.new(self.arenaGrid, ArenaScale)
     self.attackVFX = AttackVFX.new(self.unitDraw)
     self.arenaOverlays = ArenaOverlays.new()
@@ -106,7 +118,6 @@ function BattleArena:enter()
     self.enemyArenaSystem:update(self.unitSystem:getUnits())
     self.turnSystem = TurnSystem.new(self.unitSystem, {
         startDuration = 0.6,
-        enemyDuration = 1.2,
         endDuration = 0.6,
         announcementDuration = 1.2,
     })
@@ -211,7 +222,7 @@ function BattleArena:_playAttackVFX(result, onComplete, suppressAutoDeselect)
     )
 end
 
-function BattleArena:_playMeleeExchange(attack)
+function BattleArena:_playMeleeExchange(attack, onComplete)
     if not attack then
         return false
     end
@@ -221,6 +232,9 @@ function BattleArena:_playMeleeExchange(attack)
     local function finishExchange()
         if engagingUnit == self.selectedUnit and engagingUnit.exhausted then
             self:_clearPlayerInteraction()
+        end
+        if onComplete then
+            onComplete(attack)
         end
     end
 
@@ -252,6 +266,30 @@ function BattleArena:_playMeleeExchange(attack)
     return true
 end
 
+function BattleArena:_handleAIEvent(event)
+    if not event then
+        return
+    end
+
+    if event.type == "movement" then
+        self.sfx:playMovementOrder(event.unit.definition.move_sfx)
+    elseif event.type == "melee_attack" then
+        self:_playMeleeExchange(event.result, function()
+            self.arenaAISystem:notifyAttackComplete()
+        end)
+    elseif event.type == "ranged_attack" then
+        self:_playAttackVFX(
+            event.result,
+            function()
+                self.arenaAISystem:notifyAttackComplete()
+            end,
+            true
+        )
+    elseif event.type == "phase_complete" then
+        self.turnSystem:advanceEnemyTurn()
+    end
+end
+
 function BattleArena:_handleCompletedMovement(completedMovement)
     if not completedMovement or not completedMovement.engagementTarget then
         return
@@ -279,6 +317,10 @@ function BattleArena:update(dt)
     self.enemyArenaSystem:update(self.unitSystem:getUnits())
     local previousPhase = self.turnSystem:getPhase()
     self.turnSystem:update(dt)
+    self:_handleAIEvent(self.arenaAISystem:update(
+        dt,
+        self.turnSystem:isEnemyTurn()
+    ))
     if previousPhase ~= self.turnSystem:getPhase()
         and not self.turnSystem:isPlayerTurn() then
         self:_clearPlayerInteraction()
@@ -405,8 +447,9 @@ function BattleArena:draw()
     local engagementTarget = self.arenaMovementSystem:getHoveredEngagement()
     local attackTarget = self.rangedAttackTarget or engagementTarget
     local focusedUnit = attackTarget or self.hoveredUnit
-    local engagedFocusTarget = self.selectedUnit
-        and self.selectedUnit.engagedWith
+    local engagedFocusTargets = self.selectedUnit
+        and not self.enemyArenaSystem:isEnemy(self.selectedUnit)
+        and self.enemyArenaSystem:getEngagedOpponents(self.selectedUnit)
         or nil
     local showsEngagementAvailability = self.selectedUnit
         and not self.enemyArenaSystem:isEnemy(self.selectedUnit)
@@ -420,7 +463,7 @@ function BattleArena:draw()
         {
             dimEnemiesOnly = attackTarget ~= nil,
             deferFocusedUnit = attackTarget ~= nil,
-            engagedFocusTarget = engagedFocusTarget,
+            engagedFocusTargets = engagedFocusTargets,
             dimUnavailableEngagements = showsEngagementAvailability,
             enemyArenaSystem = self.enemyArenaSystem,
         }
@@ -591,6 +634,7 @@ function BattleArena:keypressed(key, _scancode, isRepeat)
 
     if key == "space" then
         if not isRepeat and not self.attackVFX:isActive()
+            and not self.arenaMovementSystem:isMoving()
             and self.turnSystem:advancePlayerTurn() then
             self:_clearPlayerInteraction()
         end

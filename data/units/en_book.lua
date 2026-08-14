@@ -52,6 +52,7 @@ return
             { select = "Wagon reporting" },
 
         },
+        def_sfx = "expl", 
 
     },    
 

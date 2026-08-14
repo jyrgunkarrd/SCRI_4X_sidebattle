@@ -12,7 +12,6 @@ function TurnSystem.new(unitSystem, options)
     local self = setmetatable({}, TurnSystem)
     self.unitSystem = assert(unitSystem, "Unit system is required")
     self.startDuration = options.startDuration or 0.6
-    self.enemyDuration = options.enemyDuration or 1.2
     self.endDuration = options.endDuration or 0.6
     self.announcementDuration = options.announcementDuration or 1.2
     self.announcementFadeDuration = options.announcementFadeDuration or 0.15
@@ -81,9 +80,6 @@ function TurnSystem:update(dt)
     if self.phase == TurnSystem.PHASE_START
         and self.phaseElapsed >= self.startDuration then
         self:_enterPhase(TurnSystem.PHASE_PLAYER)
-    elseif self.phase == TurnSystem.PHASE_ENEMY
-        and self.phaseElapsed >= self.enemyDuration then
-        self:_enterPhase(TurnSystem.PHASE_END)
     elseif self.phase == TurnSystem.PHASE_END
         and self.phaseElapsed >= self.endDuration then
         self:_enterPhase(TurnSystem.PHASE_START)
@@ -99,8 +95,21 @@ function TurnSystem:advancePlayerTurn()
     return true
 end
 
+function TurnSystem:advanceEnemyTurn()
+    if self.phase ~= TurnSystem.PHASE_ENEMY then
+        return false
+    end
+
+    self:_enterPhase(TurnSystem.PHASE_END)
+    return true
+end
+
 function TurnSystem:isPlayerTurn()
     return self.phase == TurnSystem.PHASE_PLAYER
+end
+
+function TurnSystem:isEnemyTurn()
+    return self.phase == TurnSystem.PHASE_ENEMY
 end
 
 function TurnSystem:getPhase()
