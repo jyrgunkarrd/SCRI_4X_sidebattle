@@ -38,6 +38,10 @@ function Keyboard:isShiftDown()
     return self:isDown("lshift", "rshift")
 end
 
+function Keyboard:isControlDown()
+    return self:isDown("lctrl", "rctrl")
+end
+
 function Keyboard:keypressed(key, isRepeat)
     if isRepeat then
         return
@@ -54,6 +58,10 @@ function Keyboard:consumeVerticalStep()
     local step = self.verticalStep
     self.verticalStep = 0
     return step
+end
+
+function Keyboard:clearInteraction()
+    self.verticalStep = 0
 end
 
 return Keyboard

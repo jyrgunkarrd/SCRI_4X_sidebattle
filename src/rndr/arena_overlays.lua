@@ -1,27 +1,47 @@
 local ArenaOverlays = {}
 ArenaOverlays.__index = ArenaOverlays
 
-local BRIGHTNESS_SHADER = [[
-extern number brightness;
+local KILL_ICON_PATH = "assets/images/icons/kill.png"
 
-vec4 effect(vec4 vertexColor, Image texture, vec2 textureCoordinates, vec2 screenCoordinates)
-{
-    vec4 pixel = Texel(texture, textureCoordinates) * vertexColor;
-    pixel.rgb *= brightness;
-    return pixel;
-}
-]]
-
-local STATUS_FLASH_SHADER = [[
+local UNIT_TREATMENT_SHADER = [[
 extern vec3 flashColor;
 extern number flashAmount;
 extern number statusBrightness;
+extern vec3 damageColor;
+extern number damageLevel;
+extern number exhaustionDesaturation;
+extern number defeatFlash;
+extern number defeatWipe;
 
 vec4 effect(vec4 vertexColor, Image texture, vec2 textureCoordinates, vec2 screenCoordinates)
 {
     vec4 pixel = Texel(texture, textureCoordinates) * vertexColor;
+
+    number damageEdge = 0.006;
+    number damageMask = smoothstep(
+        1.0 - damageLevel - damageEdge,
+        1.0 - damageLevel + damageEdge,
+        textureCoordinates.y
+    );
+    number greyscale = dot(pixel.rgb, vec3(0.299, 0.587, 0.114));
+    vec3 damagedPixel = mix(vec3(greyscale), damageColor, 0.68);
+    pixel.rgb = mix(pixel.rgb, damagedPixel, damageMask);
+    number exhaustedGreyscale = dot(pixel.rgb, vec3(0.299, 0.587, 0.114));
+    pixel.rgb = mix(
+        pixel.rgb,
+        vec3(exhaustedGreyscale),
+        exhaustionDesaturation
+    );
+    pixel.rgb = mix(pixel.rgb, vec3(1.0, 0.04, 0.04), defeatFlash);
     pixel.rgb = mix(pixel.rgb, flashColor, flashAmount);
     pixel.rgb *= statusBrightness;
+    number wipeBoundary = 1.1 - defeatWipe * 1.2;
+    number wipeVisibility = 1.0 - smoothstep(
+        wipeBoundary - 0.04,
+        wipeBoundary + 0.04,
+        textureCoordinates.x
+    );
+    pixel.a *= wipeVisibility;
     return pixel;
 }
 ]]
@@ -31,19 +51,51 @@ function ArenaOverlays.new(options)
 
     local self = setmetatable({}, ArenaOverlays)
     self.cellDimBrightness = options.cellDimBrightness or 0.45
-    self.brightnessShader = love.graphics.newShader(BRIGHTNESS_SHADER)
-    self.statusFlashShader = love.graphics.newShader(STATUS_FLASH_SHADER)
+    self.damageFillSpeed = options.damageFillSpeed or 0.8
+    self.exhaustedBrightness = options.exhaustedBrightness or 0.62
+    self.exhaustedDesaturation = options.exhaustedDesaturation or 0.62
+    self.unitTreatmentShader = love.graphics.newShader(UNIT_TREATMENT_SHADER)
+    self.font = love.graphics.getFont()
+    self.killIcon = love.graphics.newImage(KILL_ICON_PATH, { mipmaps = true })
+    self.killIcon:setFilter("linear", "linear", 8)
+    self.killIcon:setMipmapFilter("linear", 0)
+    self.displayedDamage = setmetatable({}, { __mode = "k" })
     self.animationTime = 0
     return self
 end
 
-function ArenaOverlays:update(dt)
+local function moveTowards(value, target, maximumDelta)
+    if value < target then
+        return math.min(value + maximumDelta, target)
+    end
+    return math.max(value - maximumDelta, target)
+end
+
+function ArenaOverlays:update(dt, units)
     self.animationTime = self.animationTime + dt
+    for _, unit in ipairs(units or {}) do
+        local maximumHP = math.max(1, unit.maximumHP or unit.definition.hp or 1)
+        local currentHP = math.max(0, math.min(maximumHP, unit.hp or maximumHP))
+        local targetDamage = 1 - currentHP / maximumHP
+        local displayedDamage = self.displayedDamage[unit] or 0
+        self.displayedDamage[unit] = moveTowards(
+            displayedDamage,
+            targetDamage,
+            self.damageFillSpeed * dt
+        )
+    end
 end
 
 function ArenaOverlays:beginUnitDim()
-    self.brightnessShader:send("brightness", self.cellDimBrightness)
-    love.graphics.setShader(self.brightnessShader)
+    self.unitTreatmentShader:send("flashColor", { 1, 1, 1 })
+    self.unitTreatmentShader:send("flashAmount", 0)
+    self.unitTreatmentShader:send("statusBrightness", self.cellDimBrightness)
+    self.unitTreatmentShader:send("damageColor", { 0xd4 / 255, 0, 0 })
+    self.unitTreatmentShader:send("damageLevel", 0)
+    self.unitTreatmentShader:send("exhaustionDesaturation", 0)
+    self.unitTreatmentShader:send("defeatFlash", 0)
+    self.unitTreatmentShader:send("defeatWipe", 0)
+    love.graphics.setShader(self.unitTreatmentShader)
 end
 
 function ArenaOverlays:endUnitDim()
@@ -51,24 +103,36 @@ function ArenaOverlays:endUnitDim()
 end
 
 function ArenaOverlays:beginUnitStatus(unit, enemyArenaSystem, dimmed)
+    local isExhaustedPlayer = not enemyArenaSystem:isEnemy(unit)
+        and unit.exhausted == true
     local color
     if enemyArenaSystem:isFlanking(unit) then
         color = { 0x2e / 255, 0xff / 255, 0xb9 / 255 }
     elseif enemyArenaSystem:isFlanked(unit) then
         color = { 0xff / 255, 0x42 / 255, 0x42 / 255 }
-    else
-        return false
     end
 
-    local pulse = 0.18 + 0.32
-        * (0.5 + 0.5 * math.sin(self.animationTime * 3.5))
-    self.statusFlashShader:send("flashColor", color)
-    self.statusFlashShader:send("flashAmount", pulse)
-    self.statusFlashShader:send(
+    local pulse = color and (0.18 + 0.32
+        * (0.5 + 0.5 * math.sin(self.animationTime * 3.5))) or 0
+    self.unitTreatmentShader:send("flashColor", color or { 1, 1, 1 })
+    self.unitTreatmentShader:send("flashAmount", pulse)
+    self.unitTreatmentShader:send(
         "statusBrightness",
-        dimmed and self.cellDimBrightness or 1
+        (dimmed and self.cellDimBrightness or 1)
+            * (isExhaustedPlayer and self.exhaustedBrightness or 1)
     )
-    love.graphics.setShader(self.statusFlashShader)
+    self.unitTreatmentShader:send("damageColor", { 0xd4 / 255, 0, 0 })
+    self.unitTreatmentShader:send(
+        "damageLevel",
+        self.displayedDamage[unit] or 0
+    )
+    self.unitTreatmentShader:send(
+        "exhaustionDesaturation",
+        isExhaustedPlayer and self.exhaustedDesaturation or 0
+    )
+    self.unitTreatmentShader:send("defeatFlash", unit.defeatFlashAmount or 0)
+    self.unitTreatmentShader:send("defeatWipe", unit.defeatWipeAmount or 0)
+    love.graphics.setShader(self.unitTreatmentShader)
     return true
 end
 
@@ -105,7 +169,7 @@ function ArenaOverlays:drawMovement(movementSystem, unitDraw)
         love.graphics.rectangle("fill", x, y, size, size)
     end
 
-    if hoveredDestination then
+    if hoveredDestination and (hoveredDestination.movementCost or 0) > 0 then
         local selectedImage, selectedX, selectedY, selectedScale = unitDraw:getUnitVisualAt(
             selectedUnit,
             selectedUnit.targW,
@@ -157,6 +221,42 @@ function ArenaOverlays:drawMovement(movementSystem, unitDraw)
     love.graphics.setColor(1, 1, 1, 1)
 end
 
+function ArenaOverlays:drawRangedAttackLine(attacker, target, unitDraw)
+    if not attacker or not target then
+        return
+    end
+
+    local attackerLeft, attackerTop, attackerRight, attackerBottom
+        = unitDraw:getUnitBounds(attacker)
+    local targetLeft, targetTop, targetRight, targetBottom
+        = unitDraw:getUnitBounds(target)
+    local startX = (attackerLeft + attackerRight) / 2
+    local startY = (attackerTop + attackerBottom) / 2
+    local endX = (targetLeft + targetRight) / 2
+    local endY = (targetTop + targetBottom) / 2
+    local deltaX = endX - startX
+    local deltaY = endY - startY
+    local length = math.sqrt(deltaX * deltaX + deltaY * deltaY)
+    if length <= 0 then
+        return
+    end
+
+    local spacing = 22
+    local dotRadius = 4
+    love.graphics.setShader()
+    love.graphics.setColor(1, 0x42 / 255, 0x42 / 255, 0.92)
+    for distance = 0, length, spacing do
+        local progress = distance / length
+        love.graphics.circle(
+            "fill",
+            startX + deltaX * progress,
+            startY + deltaY * progress,
+            dotRadius
+        )
+    end
+    love.graphics.setColor(1, 1, 1, 1)
+end
+
 function ArenaOverlays:drawEngagementCapacity(movementSystem, unitDraw, camera)
     local enemy = movementSystem:getHoveredEngagement()
     if not enemy then
@@ -202,6 +302,190 @@ function ArenaOverlays:drawEngagementCapacity(movementSystem, unitDraw, camera)
             love.graphics.setColor(1, 0.58, 0.18, flashAlpha)
             love.graphics.rectangle("fill", x + 2, drawY + 2, pipSize - 4, pipSize - 4)
         end
+    end
+
+    love.graphics.setColor(1, 1, 1, 1)
+end
+
+local function drawPanelBacking(x, y, width, height)
+    love.graphics.setColor(0.012, 0.018, 0.03, 0.94)
+    love.graphics.rectangle("fill", x, y, width, height, 4, 4)
+    love.graphics.setColor(0.34, 0.4, 0.52, 0.9)
+    love.graphics.setLineWidth(1)
+    love.graphics.rectangle("line", x + 0.5, y + 0.5, width - 1, height - 1, 4, 4)
+end
+
+local function drawHitPips(centerX, y, count)
+    local pipSize = 8
+    local gap = 4
+    local totalWidth = count * pipSize + math.max(0, count - 1) * gap
+    local startX = math.floor(centerX - totalWidth / 2 + 0.5)
+
+    for index = 1, count do
+        local x = startX + (index - 1) * (pipSize + gap)
+        love.graphics.setColor(1, 0.58, 0.18, 1)
+        love.graphics.rectangle("fill", x, y, pipSize, pipSize)
+    end
+end
+
+local function drawPreviewHPGauge(preview, x, y, width, height)
+    local innerX = x + 2
+    local innerY = y + 2
+    local innerWidth = width - 4
+    local innerHeight = height - 4
+    local currentRatio = math.min(1, preview.currentHP / preview.maximumHP)
+    local remainingHP = math.max(0, preview.currentHP - preview.totalDamage)
+    local remainingRatio = math.min(1, remainingHP / preview.maximumHP)
+    local remainingWidth = math.floor(innerWidth * remainingRatio + 0.5)
+    local currentWidth = math.floor(innerWidth * currentRatio + 0.5)
+
+    love.graphics.setColor(0, 0, 0, 1)
+    love.graphics.rectangle("fill", x, y, width, height)
+    love.graphics.setColor(0.055, 0.07, 0.1, 1)
+    love.graphics.rectangle("fill", innerX, innerY, innerWidth, innerHeight)
+
+    if remainingWidth > 0 then
+        love.graphics.setColor(0xd4 / 255, 0, 0, 1)
+        love.graphics.rectangle(
+            "fill",
+            innerX,
+            innerY,
+            remainingWidth,
+            innerHeight
+        )
+    end
+    if currentWidth > remainingWidth then
+        love.graphics.setColor(1, 0.58, 0.18, 0.95)
+        love.graphics.rectangle(
+            "fill",
+            innerX + remainingWidth,
+            innerY,
+            currentWidth - remainingWidth,
+            innerHeight
+        )
+    end
+end
+
+function ArenaOverlays:drawAttackPreview(
+    movementSystem,
+    unitDraw,
+    camera,
+    combatSystem,
+    rangedTarget,
+    rangedPreview
+)
+    local enemy = rangedTarget or movementSystem:getHoveredEngagement()
+    local selectedUnit = movementSystem.selectedUnit
+    if not enemy or not selectedUnit then
+        return
+    end
+
+    local preview = rangedPreview
+    if not preview then
+        local destination = movementSystem:getHoveredDestination()
+        if not destination then
+            return
+        end
+        preview = combatSystem:getMeleeAttackPreview(
+            selectedUnit,
+            enemy,
+            destination.movementCost
+        )
+    end
+    if not preview then
+        return
+    end
+
+    local left, top, right = unitDraw:getUnitBounds(enemy)
+    local centerX, screenTop = camera:worldToScreen((left + right) / 2, top)
+    local panelWidth = 148
+    local panelHeight = 62
+    local panelGap = 8
+    local rowWidth = panelWidth * 2 + panelGap
+    local panelX = math.max(
+        8,
+        math.min(camera.viewportWidth - rowWidth - 8, centerX - rowWidth / 2)
+    )
+    panelX = math.floor(panelX + 0.5)
+    local panelY = math.max(8, screenTop - panelHeight - 40)
+    panelY = math.floor(panelY + 0.5)
+    local healthX = panelX + panelWidth + panelGap
+
+    love.graphics.setShader()
+    love.graphics.setFont(self.font)
+    drawPanelBacking(panelX, panelY, panelWidth, panelHeight)
+    drawPanelBacking(healthX, panelY, panelWidth, panelHeight)
+
+    local damageText
+    if preview.armor > 0 then
+        damageText = ("DMG  %d  >  %d"):format(
+            preview.rawDamage,
+            preview.damagePerHit
+        )
+    else
+        damageText = ("DMG  %d"):format(preview.rawDamage)
+    end
+    love.graphics.setColor(0.9, 0.94, 1, 1)
+    love.graphics.printf(
+        damageText,
+        panelX + 6,
+        panelY + ((preview.isMultihit or preview.hitChance) and 9 or 23),
+        panelWidth - 12,
+        "center"
+    )
+    if preview.hitChance then
+        local chanceText = ("HIT %d%%"):format(preview.hitChance)
+        if preview.isMultihit then
+            love.graphics.setColor(1, 0x42 / 255, 0x42 / 255, 1)
+            love.graphics.printf(
+                chanceText,
+                panelX + 8,
+                panelY + 35,
+                90,
+                "left"
+            )
+            drawHitPips(panelX + 121, panelY + 40, preview.hitCount)
+        else
+            love.graphics.setColor(1, 0x42 / 255, 0x42 / 255, 1)
+            love.graphics.printf(
+                chanceText,
+                panelX + 6,
+                panelY + 35,
+                panelWidth - 12,
+                "center"
+            )
+        end
+    elseif preview.isMultihit then
+        drawHitPips(panelX + panelWidth / 2, panelY + 40, preview.hitCount)
+    end
+
+    love.graphics.setColor(0.9, 0.94, 1, 1)
+    love.graphics.printf(
+        ("HP  %d / %d"):format(preview.currentHP, preview.maximumHP),
+        healthX + 6,
+        panelY + 7,
+        panelWidth - 12,
+        "center"
+    )
+    if preview.willDefeat then
+        local iconSize = 25
+        local iconScale = math.min(
+            iconSize / self.killIcon:getWidth(),
+            iconSize / self.killIcon:getHeight()
+        )
+        love.graphics.setColor(1, 0.26, 0.26, 1)
+        love.graphics.draw(
+            self.killIcon,
+            healthX + panelWidth / 2,
+            panelY + 43,
+            0,
+            iconScale,
+            iconScale,
+            self.killIcon:getWidth() / 2,
+            self.killIcon:getHeight() / 2
+        )
+    else
+        drawPreviewHPGauge(preview, healthX + 12, panelY + 36, panelWidth - 24, 16)
     end
 
     love.graphics.setColor(1, 1, 1, 1)

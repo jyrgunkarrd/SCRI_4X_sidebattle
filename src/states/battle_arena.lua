@@ -17,6 +17,9 @@ local ArenaEnvironments = require("data.arena_env")
 local DevArenaLoader = require("data.dev_arena_loader")
 local SFX = require("src.audio.sfx")
 local ShoutText = require("src.rndr.shout_text")
+local TurnSystem = require("src.sys.turn_sys")
+local CombatSystem = require("src.sys.combat_sys")
+local AttackVFX = require("src.rndr.attack_vfx")
 
 local BattleArena = {}
 BattleArena.__index = BattleArena
@@ -78,10 +81,17 @@ function BattleArena:enter()
         self.enemyArenaSystem,
         self.unitSystem
     )
+    self.combatSystem = CombatSystem.new({
+        unitSystem = self.unitSystem,
+        enemyArenaSystem = self.enemyArenaSystem,
+    })
     self.unitDraw = UnitDraw.new(self.arenaGrid, ArenaScale)
+    self.attackVFX = AttackVFX.new(self.unitDraw)
     self.arenaOverlays = ArenaOverlays.new()
     self.sfx = SFX.new()
     self.lastHoveredUnit = nil
+    self.rangedAttackTarget = nil
+    self.rangedAttackPreview = nil
     self.hoverCandidate = nil
     self.hoverCandidateActive = false
     self.hoverCandidateTime = 0
@@ -94,6 +104,12 @@ function BattleArena:enter()
     self.devTools = DevTools.new(self.unitSystem)
     self.devTools:injectFromLoader()
     self.enemyArenaSystem:update(self.unitSystem:getUnits())
+    self.turnSystem = TurnSystem.new(self.unitSystem, {
+        startDuration = 0.6,
+        enemyDuration = 1.2,
+        endDuration = 0.6,
+        announcementDuration = 1.2,
+    })
 end
 
 function BattleArena:_screenToCanvas(screenX, screenY)
@@ -107,14 +123,19 @@ function BattleArena:_isInsideArena(canvasX, canvasY)
         and canvasY >= 0 and canvasY <= self.arenaUIX:getArenaHeight()
 end
 
-function BattleArena:_unitAtScreenPosition(screenX, screenY)
+function BattleArena:_unitAtScreenPosition(screenX, screenY, predicate)
     local canvasX, canvasY = self:_screenToCanvas(screenX, screenY)
     if not self:_isInsideArena(canvasX, canvasY) then
         return nil
     end
 
     local worldX, worldY = self.camera:screenToWorld(canvasX, canvasY)
-    return self.unitDraw:getUnitAt(worldX, worldY, self.unitSystem:getUnits())
+    return self.unitDraw:getUnitAt(
+        worldX,
+        worldY,
+        self.unitSystem:getUnits(),
+        predicate
+    )
 end
 
 function BattleArena:_updateUnitHover(candidate, dt)
@@ -141,11 +162,127 @@ function BattleArena:_updateUnitHover(candidate, dt)
     end
 end
 
+function BattleArena:_clearPlayerInteraction()
+    self.selectedUnit = nil
+    self.hoveredUnit = nil
+    self.lastHoveredUnit = nil
+    self.hoverCandidate = nil
+    self.hoverCandidateActive = false
+    self.hoverCandidateTime = 0
+    self.rangedAttackTarget = nil
+    self.rangedAttackPreview = nil
+    self.arenaUIX:setSelectedUnit(nil)
+    self.arenaMovementSystem:setSelectedUnit(nil)
+    self.arenaMovementSystem:clearHover()
+    self.shoutText:clear()
+    self.mouse:clearInteraction()
+    self.keyboard:clearInteraction()
+end
+
+function BattleArena:_playAttackVFX(result, onComplete, suppressAutoDeselect)
+    if not result then
+        return
+    end
+
+    self.attackVFX:play(
+        result,
+        function(completed)
+            if completed and completed.defeated then
+                self.combatSystem:finalizeDefeat(completed.target)
+            end
+            self.enemyArenaSystem:update(self.unitSystem:getUnits())
+            self.lastHoveredUnit = nil
+            if onComplete then
+                onComplete(completed)
+            end
+            if not suppressAutoDeselect
+                and completed
+                and completed.attacker == self.selectedUnit
+                and completed.attacker.exhausted then
+                self:_clearPlayerInteraction()
+            end
+        end,
+        function(impact)
+            self.sfx:playAttackImpact(impact.vfxImage)
+        end,
+        function(defeat)
+            self.sfx:playDefeat(defeat.target.definition.def_sfx)
+        end
+    )
+end
+
+function BattleArena:_playMeleeExchange(attack)
+    if not attack then
+        return false
+    end
+
+    local engagingUnit = attack.attacker
+    local engagedUnit = attack.target
+    local function finishExchange()
+        if engagingUnit == self.selectedUnit and engagingUnit.exhausted then
+            self:_clearPlayerInteraction()
+        end
+    end
+
+    self:_playAttackVFX(
+        attack,
+        function(completed)
+            if not completed or completed.defeated
+                or (engagedUnit.hp or 0) <= 0
+                or not self.unitSystem:contains(engagedUnit) then
+                finishExchange()
+                return
+            end
+            local retaliation = self.combatSystem:performRetaliation(
+                engagedUnit,
+                engagingUnit
+            )
+            if retaliation then
+                self:_playAttackVFX(
+                    retaliation,
+                    finishExchange,
+                    true
+                )
+            else
+                finishExchange()
+            end
+        end,
+        true
+    )
+    return true
+end
+
+function BattleArena:_handleCompletedMovement(completedMovement)
+    if not completedMovement or not completedMovement.engagementTarget then
+        return
+    end
+
+    local attack = self.combatSystem:performMeleeAttack(
+        completedMovement.unit,
+        completedMovement.engagementTarget
+    )
+    self:_playMeleeExchange(attack)
+    if self.selectedUnit == completedMovement.unit then
+        self.arenaMovementSystem:setSelectedUnit(self.selectedUnit)
+    end
+end
+
 function BattleArena:update(dt)
-    self.arenaOverlays:update(dt)
+    self.arenaOverlays:update(
+        dt,
+        self.unitSystem:getUnits()
+    )
     self.shoutText:update(dt)
-    self.arenaMovementSystem:update(dt)
+    local completedMovement = self.arenaMovementSystem:update(dt)
+    self:_handleCompletedMovement(completedMovement)
+    self.attackVFX:update(dt)
     self.enemyArenaSystem:update(self.unitSystem:getUnits())
+    local previousPhase = self.turnSystem:getPhase()
+    self.turnSystem:update(dt)
+    if previousPhase ~= self.turnSystem:getPhase()
+        and not self.turnSystem:isPlayerTurn() then
+        self:_clearPlayerInteraction()
+    end
     local panelWasOpening = self.arenaUIX:isOpening()
     self.arenaUIX:update(dt)
     self.camera:setViewportSize(
@@ -161,6 +298,26 @@ function BattleArena:update(dt)
         self.camera:ensureWorldVerticalVisible(top, bottom, 16)
     end
 
+    if not self.turnSystem:isPlayerTurn() then
+        self.hoveredUnit = nil
+        self.rangedAttackTarget = nil
+        self.rangedAttackPreview = nil
+        self.arenaMovementSystem:clearHover()
+        self.lastHoveredUnit = nil
+        return
+    end
+
+    if self.attackVFX:isActive() then
+        self.hoveredUnit = nil
+        self.rangedAttackTarget = nil
+        self.rangedAttackPreview = nil
+        self.arenaMovementSystem:clearHover()
+        self.lastHoveredUnit = nil
+        self.mouse:clearInteraction()
+        self.keyboard:clearInteraction()
+        return
+    end
+
     self.cameraSystem:update(dt)
 
     local mouseX, mouseY = self.mouse:getPosition()
@@ -171,11 +328,19 @@ function BattleArena:update(dt)
         self.hoverCandidateTime = 0
     else
         self:_updateUnitHover(
-            self:_unitAtScreenPosition(mouseX, mouseY),
+            self:_unitAtScreenPosition(
+                mouseX,
+                mouseY,
+                function(unit)
+                    return unit.exhausted ~= true
+                end
+            ),
             dt
         )
     end
     local canvasX, canvasY = self:_screenToCanvas(mouseX, mouseY)
+    self.rangedAttackTarget = nil
+    self.rangedAttackPreview = nil
     if self:_isInsideArena(canvasX, canvasY) then
         local worldX, worldY = self.camera:screenToWorld(canvasX, canvasY)
         local hoveredEnemy = self.unitDraw:getUnitAt(
@@ -186,12 +351,26 @@ function BattleArena:update(dt)
                 return self.enemyArenaSystem:isEnemy(unit)
             end
         )
-        self.arenaMovementSystem:updateHover(worldX, worldY, hoveredEnemy)
+        local rangedPreview = not self.arenaMovementSystem:isMoving()
+            and not self.keyboard:isControlDown()
+            and self.combatSystem:getRangedAttackPreview(
+                self.selectedUnit,
+                hoveredEnemy
+            )
+            or nil
+        if rangedPreview then
+            self.rangedAttackTarget = hoveredEnemy
+            self.rangedAttackPreview = rangedPreview
+            self.arenaMovementSystem:clearHover()
+        else
+            self.arenaMovementSystem:updateHover(worldX, worldY, hoveredEnemy)
+        end
     else
         self.arenaMovementSystem:clearHover()
     end
 
-    local soundHoveredUnit = self.arenaMovementSystem:getHoveredEngagement()
+    local soundHoveredUnit = self.rangedAttackTarget
+        or self.arenaMovementSystem:getHoveredEngagement()
         or self.hoveredUnit
     if soundHoveredUnit and soundHoveredUnit ~= self.lastHoveredUnit then
         self.sfx:playUnitHover()
@@ -200,6 +379,8 @@ function BattleArena:update(dt)
 
     local click = self.mouse:consumeClick()
     if click then
+        self.rangedAttackTarget = nil
+        self.rangedAttackPreview = nil
         self.selectedUnit = self:_unitAtScreenPosition(click.x, click.y)
         self.arenaUIX:setSelectedUnit(self.selectedUnit)
         self.arenaMovementSystem:setSelectedUnit(self.selectedUnit)
@@ -222,15 +403,25 @@ function BattleArena:draw()
     self.arenaEnvironmentBackground:drawFloor(self.arenaGrid)
     self.arenaGrid:draw()
     local engagementTarget = self.arenaMovementSystem:getHoveredEngagement()
-    local focusedUnit = engagementTarget or self.hoveredUnit
+    local attackTarget = self.rangedAttackTarget or engagementTarget
+    local focusedUnit = attackTarget or self.hoveredUnit
+    local engagedFocusTarget = self.selectedUnit
+        and self.selectedUnit.engagedWith
+        or nil
+    local showsEngagementAvailability = self.selectedUnit
+        and not self.enemyArenaSystem:isEnemy(self.selectedUnit)
+        and (not self.combatSystem:getRangedAttack(self.selectedUnit)
+            or self.keyboard:isControlDown())
     self.unitDraw:draw(
         self.unitSystem:getUnits(),
         focusedUnit,
         self.arenaOverlays,
         self.selectedUnit,
         {
-            dimEnemiesOnly = engagementTarget ~= nil,
-            deferFocusedUnit = engagementTarget ~= nil,
+            dimEnemiesOnly = attackTarget ~= nil,
+            deferFocusedUnit = attackTarget ~= nil,
+            engagedFocusTarget = engagedFocusTarget,
+            dimUnavailableEngagements = showsEngagementAvailability,
             enemyArenaSystem = self.enemyArenaSystem,
         }
     )
@@ -238,9 +429,16 @@ function BattleArena:draw()
         self.arenaMovementSystem,
         self.unitDraw
     )
-    if engagementTarget then
+    if self.rangedAttackTarget then
+        self.arenaOverlays:drawRangedAttackLine(
+            self.selectedUnit,
+            self.rangedAttackTarget,
+            self.unitDraw
+        )
+    end
+    if attackTarget then
         self.unitDraw:drawUnit(
-            engagementTarget,
+            attackTarget,
             self.arenaOverlays,
             self.enemyArenaSystem
         )
@@ -252,12 +450,24 @@ function BattleArena:draw()
             self.enemyArenaSystem
         )
     end
+    self.attackVFX:draw()
     self.camera:detach()
+    self.attackVFX:drawDamageNumbers(self.camera)
     if engagementTarget then
         self.arenaOverlays:drawEngagementCapacity(
             self.arenaMovementSystem,
             self.unitDraw,
             self.camera
+        )
+    end
+    if attackTarget then
+        self.arenaOverlays:drawAttackPreview(
+            self.arenaMovementSystem,
+            self.unitDraw,
+            self.camera,
+            self.combatSystem,
+            self.rangedAttackTarget,
+            self.rangedAttackPreview
         )
     end
     self.shoutText:draw(
@@ -266,7 +476,12 @@ function BattleArena:draw()
         self.arenaUIX:getArenaHeight()
     )
     love.graphics.setScissor()
-    self.arenaUIX:draw(self.unitDraw, self.enemyArenaSystem)
+    self.arenaUIX:drawTurnAnnouncement(self.turnSystem)
+    self.arenaUIX:draw(
+        self.unitDraw,
+        self.enemyArenaSystem,
+        self.arenaMovementSystem
+    )
     love.graphics.setCanvas()
 
     local windowWidth, windowHeight = love.graphics.getDimensions()
@@ -286,6 +501,10 @@ function BattleArena:draw()
 end
 
 function BattleArena:wheelmoved(x, y)
+    if not self.turnSystem:isPlayerTurn() or self.attackVFX:isActive() then
+        return
+    end
+
     local mouseX, mouseY = self.mouse:getPosition()
     local canvasX, canvasY = self:_screenToCanvas(mouseX, mouseY)
     if self:_isInsideArena(canvasX, canvasY) then
@@ -294,6 +513,10 @@ function BattleArena:wheelmoved(x, y)
 end
 
 function BattleArena:mousepressed(x, y, button)
+    if not self.turnSystem:isPlayerTurn() or self.attackVFX:isActive() then
+        return
+    end
+
     local canvasX, canvasY = self:_screenToCanvas(x, y)
     if button == 2 and self:_isInsideArena(canvasX, canvasY) then
         self.mouse:pressed(x, y, button)
@@ -306,12 +529,37 @@ function BattleArena:mousepressed(x, y, button)
                 return self.enemyArenaSystem:isEnemy(unit)
             end
         )
-        local orderIssued = self.arenaMovementSystem:moveSelectedToWorld(
+        if not self.arenaMovementSystem:isMoving()
+            and not self.keyboard:isControlDown() then
+            local rangedAttack = self.combatSystem:performRangedAttack(
+                self.selectedUnit,
+                targetedEnemy
+            )
+            if rangedAttack then
+                self:_playAttackVFX(rangedAttack)
+                self.enemyArenaSystem:update(self.unitSystem:getUnits())
+                self.lastHoveredUnit = nil
+                return
+            end
+        end
+        local attack = self.combatSystem:performMeleeAttack(
+            self.selectedUnit,
+            targetedEnemy
+        )
+        if attack then
+            self:_playMeleeExchange(attack)
+            self.enemyArenaSystem:update(self.unitSystem:getUnits())
+            self.lastHoveredUnit = nil
+            return
+        end
+        local movementOrder = self.arenaMovementSystem:moveSelectedToWorld(
             worldX,
             worldY,
             targetedEnemy
         )
-        if orderIssued then
+        if movementOrder and movementOrder.completed then
+            self:_handleCompletedMovement(movementOrder)
+        elseif movementOrder then
             self.sfx:playMovementOrder(
                 self.selectedUnit.definition.move_sfx
             )
@@ -325,6 +573,9 @@ function BattleArena:mousepressed(x, y, button)
 end
 
 function BattleArena:mousereleased(x, y, button)
+    if not self.turnSystem:isPlayerTurn() or self.attackVFX:isActive() then
+        return
+    end
     self.mouse:released(x, y, button)
 end
 
@@ -335,6 +586,18 @@ end
 function BattleArena:keypressed(key, _scancode, isRepeat)
     if key == "escape" then
         love.event.quit()
+        return
+    end
+
+    if key == "space" then
+        if not isRepeat and not self.attackVFX:isActive()
+            and self.turnSystem:advancePlayerTurn() then
+            self:_clearPlayerInteraction()
+        end
+        return
+    end
+
+    if not self.turnSystem:isPlayerTurn() then
         return
     end
 

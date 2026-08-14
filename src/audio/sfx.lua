@@ -2,6 +2,8 @@ local SFX = {}
 SFX.__index = SFX
 
 local UNIT_VOICE_DIRECTORY = "assets/audio/sfx/voices/units"
+local ATTACK_DIRECTORY = "assets/audio/sfx/atk"
+local DEFEAT_DIRECTORY = "assets/audio/sfx/def"
 local UNIT_HOVER_PATH = "assets/audio/sfx/unit_hover.wav"
 local MOVEMENT_ORDER_PATHS = {
     default = "assets/audio/sfx/move.wav",
@@ -50,6 +52,38 @@ function SFX:playMovementOrder(movementType)
     local source = self:_getSource(path)
     source:stop()
     source:play()
+end
+
+function SFX:playAttackImpact(attackImageId)
+    if type(attackImageId) ~= "string" or attackImageId == "" then
+        return false
+    end
+
+    local path = ("%s/%s.wav"):format(ATTACK_DIRECTORY, attackImageId)
+    if not love.filesystem.getInfo(path, "file") then
+        return false
+    end
+
+    local source = self:_getSource(path)
+    source:stop()
+    source:play()
+    return true
+end
+
+function SFX:playDefeat(defeatSoundId)
+    if type(defeatSoundId) ~= "string" or defeatSoundId == "" then
+        return false
+    end
+
+    local path = ("%s/%s.wav"):format(DEFEAT_DIRECTORY, defeatSoundId)
+    if not love.filesystem.getInfo(path, "file") then
+        return false
+    end
+
+    local source = self:_getSource(path)
+    source:stop()
+    source:play()
+    return true
 end
 
 return SFX

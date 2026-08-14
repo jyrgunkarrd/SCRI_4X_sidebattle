@@ -97,4 +97,14 @@ function Mouse:consumeWheel()
     return x, y
 end
 
+function Mouse:clearInteraction()
+    self.wheelX = 0
+    self.wheelY = 0
+    self.dragX = 0
+    self.dragY = 0
+    self.leftDown = false
+    self.isDragging = false
+    self.pendingClick = nil
+end
+
 return Mouse

@@ -37,10 +37,10 @@ function ShoutText.new(options)
     options = options or {}
 
     local self = setmetatable({}, ShoutText)
-    self.duration = options.duration or 1.8
+    self.duration = options.duration or 0.9
     self.fadeDuration = options.fadeDuration or 0.3
     self.appearDuration = options.appearDuration or 0.12
-    self.charactersPerSecond = options.charactersPerSecond or 32
+    self.charactersPerSecond = options.charactersPerSecond or 64
     self.maximumWidth = options.maximumWidth or 360
     self.paddingX = options.paddingX or 18
     self.paddingY = options.paddingY or 10

@@ -115,7 +115,7 @@ function UnitDraw:_visualAt(unit, targW, targH, lift, scaleMultiplier, cellOffse
 end
 
 function UnitDraw:_visual(unit, lift, scaleMultiplier)
-    return self:_visualAt(
+    local image, x, y, scale = self:_visualAt(
         unit,
         unit.visualTargW or unit.targW,
         unit.targH,
@@ -123,6 +123,10 @@ function UnitDraw:_visual(unit, lift, scaleMultiplier)
         scaleMultiplier,
         unit.arenaCellOffsetX
     )
+    return image,
+        x + (unit.attackVfxOffsetX or 0) + (unit.defeatSlideX or 0),
+        y + (unit.attackVfxOffsetY or 0),
+        scale
 end
 
 function UnitDraw:getUnitVisualAt(
@@ -205,10 +209,20 @@ function UnitDraw:draw(units, hoveredUnit, overlays, excludedUnit, options)
             local sharesHoveredCell = hoveredUnit
                 and unit.targW == hoveredUnit.targW
                 and unit.targH == hoveredUnit.targH
-            local shouldDim = sharesHoveredCell
-                and (not options.dimEnemiesOnly
-                    or unit.isEnemy == true
-                    or unit.definition.enemy == true)
+            local isEnemy = options.enemyArenaSystem
+                and options.enemyArenaSystem:isEnemy(unit)
+            local shouldDimForEngagement = options.engagedFocusTarget
+                and isEnemy
+                and unit ~= options.engagedFocusTarget
+            local shouldDimForCapacity = options.dimUnavailableEngagements
+                and isEnemy
+                and unit ~= options.engagedFocusTarget
+                and options.enemyArenaSystem:isAtEngagementCapacity(unit)
+            local shouldDim = shouldDimForEngagement
+                or shouldDimForCapacity
+                or (sharesHoveredCell
+                    and (not options.dimEnemiesOnly
+                        or isEnemy))
             local hasStatus = overlays and options.enemyArenaSystem
                 and overlays:beginUnitStatus(
                     unit,

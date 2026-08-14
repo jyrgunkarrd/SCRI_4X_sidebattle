@@ -49,7 +49,7 @@ return
 
         },
         targ_h = 1,
-        targ_w = 2,
+        targ_w = 3,
         pop = 4,
 
     },
@@ -62,7 +62,7 @@ return
 
         },
         targ_h = 1,
-        targ_w = 2,
+        targ_w = 4,
         pop = 1,
 
     },
@@ -71,13 +71,12 @@ return
 
         unitid = { 
 
-        "en_6wifv",
         "en_forg",
 
         },
         targ_h = 1,
-        targ_w = 3,
-        pop = 2,
+        targ_w = 5,
+        pop = 4,
 
     },
     
