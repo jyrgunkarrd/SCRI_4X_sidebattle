@@ -10,6 +10,7 @@ function CombatSystem.new(options)
     local self = setmetatable({}, CombatSystem)
     self.unitSystem = options.unitSystem
     self.enemyArenaSystem = options.enemyArenaSystem
+    self.tagSystem = options.tagSystem
     self.armorEffectiveness = options.armorEffectiveness
         or DEFAULT_ARMOR_EFFECTIVENESS
     self.random = options.random
@@ -99,6 +100,46 @@ end
 
 function CombatSystem:getAttackPenetration(attack)
     return math.max(0, tonumber(attackProperty(attack, "pen")) or 0)
+end
+
+function CombatSystem:getTagDamageContext(attacker, target, attack)
+    local baseDamage = tonumber(attackProperty(attack, "dmg"))
+    if not baseDamage then
+        return nil, nil, 1
+    end
+
+    local multiplier = self.tagSystem
+        and self.tagSystem:getDamageMultiplier(attacker, target)
+        or 1
+    return baseDamage * multiplier, baseDamage, multiplier
+end
+
+function CombatSystem:isFlankingAttack(attacker, target)
+    if not attacker or not target then
+        return false
+    end
+
+    if self.enemyArenaSystem:isFlanking(attacker)
+        and attacker.engagedWith == target then
+        return true
+    end
+
+    -- Movement previews run before the engagement is recorded. A unit joining
+    -- an already-occupied target will be marked as flanking when it arrives.
+    return not self:isUnitEngaged(attacker)
+        and self.enemyArenaSystem:isEnemy(attacker)
+            ~= self.enemyArenaSystem:isEnemy(target)
+        and self.enemyArenaSystem:canEngage(target)
+        and self.enemyArenaSystem:isOccupied(target)
+end
+
+function CombatSystem:getMeleeArmorContext(attacker, target)
+    local targetArmor = math.max(
+        0,
+        tonumber(target and target.definition and target.definition.armor) or 0
+    )
+    local ignoresArmor = self:isFlankingAttack(attacker, target)
+    return targetArmor, ignoresArmor and 0 or targetArmor, ignoresArmor
 end
 
 function CombatSystem:_getAttackHitCount(unit, attack, movementCost)
@@ -249,7 +290,8 @@ function CombatSystem:getRangedAttackPreview(attacker, target, movementCost)
     end
 
     local attack = self:getRangedAttack(attacker)
-    local rawDamage = tonumber(attackProperty(attack, "dmg"))
+    local rawDamage, baseDamage, damageMultiplier =
+        self:getTagDamageContext(attacker, target, attack)
     local targetArmor = math.max(0, tonumber(target.definition.armor) or 0)
     local penetration = self:getAttackPenetration(attack)
     local effectiveArmor = self:getEffectiveArmor(targetArmor, penetration)
@@ -271,6 +313,8 @@ function CombatSystem:getRangedAttackPreview(attacker, target, movementCost)
     return {
         attackType = "ranged",
         rawDamage = rawDamage,
+        baseDamage = baseDamage,
+        damageMultiplier = damageMultiplier,
         armor = effectiveArmor,
         targetArmor = targetArmor,
         penetration = penetration,
@@ -298,17 +342,19 @@ function CombatSystem:getMeleeAttackPreview(attacker, target, movementCost)
     end
 
     local attack = self:getMeleeAttack(attacker)
-    local rawDamage = tonumber(attackProperty(attack, "dmg"))
+    local rawDamage, baseDamage, damageMultiplier =
+        self:getTagDamageContext(attacker, target, attack)
     if not rawDamage or rawDamage <= 0 then
         return nil
     end
 
-    local targetArmor = math.max(0, tonumber(target.definition.armor) or 0)
+    local targetArmor, appliedArmor, ignoresArmor =
+        self:getMeleeArmorContext(attacker, target)
     local penetration = self:getAttackPenetration(attack)
-    local effectiveArmor = self:getEffectiveArmor(targetArmor, penetration)
+    local effectiveArmor = self:getEffectiveArmor(appliedArmor, penetration)
     local damagePerHit = self:calculateDamageAfterArmor(
         rawDamage,
-        targetArmor,
+        appliedArmor,
         penetration
     )
     local availableHits = self:getMeleeHitCount(attacker, movementCost)
@@ -319,8 +365,11 @@ function CombatSystem:getMeleeAttackPreview(attacker, target, movementCost)
 
     return {
         rawDamage = rawDamage,
+        baseDamage = baseDamage,
+        damageMultiplier = damageMultiplier,
         armor = effectiveArmor,
         targetArmor = targetArmor,
+        ignoresArmor = ignoresArmor,
         penetration = penetration,
         damagePerHit = damagePerHit,
         isMultihit = attackProperty(attack, "type") == "multihit",
@@ -367,8 +416,11 @@ function CombatSystem:performMeleeAttack(attacker, target)
     end
 
     local attack = self:getMeleeAttack(attacker)
-    local rawDamage = tonumber(attackProperty(attack, "dmg"))
+    local rawDamage, baseDamage, damageMultiplier =
+        self:getTagDamageContext(attacker, target, attack)
     local penetration = self:getAttackPenetration(attack)
+    local targetArmor, appliedArmor, ignoresArmor =
+        self:getMeleeArmorContext(attacker, target)
     local requestedHits = self:getMeleeHitCount(attacker)
     local result = {
         attacker = attacker,
@@ -376,6 +428,12 @@ function CombatSystem:performMeleeAttack(attacker, target)
         requestedHits = requestedHits,
         hits = {},
         totalDamage = 0,
+        rawDamage = rawDamage,
+        baseDamage = baseDamage,
+        damageMultiplier = damageMultiplier,
+        armor = self:getEffectiveArmor(appliedArmor, penetration),
+        targetArmor = targetArmor,
+        ignoresArmor = ignoresArmor,
         penetration = penetration,
         defeated = false,
         vfxImage = attackProperty(attack, "img"),
@@ -387,7 +445,7 @@ function CombatSystem:performMeleeAttack(attacker, target)
         end
         local damage = self:calculateDamageAfterArmor(
             rawDamage,
-            target.definition.armor,
+            appliedArmor,
             penetration
         )
         target.hp = math.max(0, target.hp - damage)
@@ -426,11 +484,14 @@ function CombatSystem:performRetaliation(attacker, target)
     end
 
     local attack = self:getMeleeAttack(attacker)
-    local rawDamage = tonumber(attackProperty(attack, "dmg"))
+    local rawDamage, baseDamage, damageMultiplier =
+        self:getTagDamageContext(attacker, target, attack)
     local penetration = self:getAttackPenetration(attack)
+    local targetArmor, appliedArmor, ignoresArmor =
+        self:getMeleeArmorContext(attacker, target)
     local damage = self:calculateDamageAfterArmor(
         rawDamage,
-        target.definition.armor,
+        appliedArmor,
         penetration
     )
     local result = {
@@ -440,6 +501,12 @@ function CombatSystem:performRetaliation(attacker, target)
         requestedHits = 1,
         hits = { damage },
         totalDamage = damage,
+        rawDamage = rawDamage,
+        baseDamage = baseDamage,
+        damageMultiplier = damageMultiplier,
+        armor = self:getEffectiveArmor(appliedArmor, penetration),
+        targetArmor = targetArmor,
+        ignoresArmor = ignoresArmor,
         penetration = penetration,
         isRetaliation = true,
         defeated = false,
@@ -461,7 +528,8 @@ function CombatSystem:performRangedAttack(attacker, target)
     end
 
     local attack = self:getRangedAttack(attacker)
-    local rawDamage = tonumber(attackProperty(attack, "dmg"))
+    local rawDamage, baseDamage, damageMultiplier =
+        self:getTagDamageContext(attacker, target, attack)
     local penetration = self:getAttackPenetration(attack)
     local requestedHits = self:getRangedHitCount(attacker)
     local hitChance = self:getRangedHitChance(attacker, target)
@@ -473,6 +541,9 @@ function CombatSystem:performRangedAttack(attacker, target)
         strikes = {},
         hits = {},
         totalDamage = 0,
+        rawDamage = rawDamage,
+        baseDamage = baseDamage,
+        damageMultiplier = damageMultiplier,
         penetration = penetration,
         hitChance = hitChance,
         defeated = false,

@@ -18,6 +18,12 @@ return
             { img = "sml_arms" },
 
         },
+        tags = {
+
+            "assault",
+            "meat",
+
+        },
         shout = {
 
             { select = "Here" },
@@ -44,6 +50,12 @@ return
             { type = "multihit" },
             { dmg = 7 },
             { img = "hvy_arms" },
+
+        },
+        tags = {
+
+            "vehicle",
+            "machine",
 
         },
         move_sfx = "veh",

@@ -12,6 +12,7 @@ function ArenaGrid.new(options)
     self.cellSize = math.floor(self.virtualHeight / self.rows)
     self.width = self.cellSize * self.columns
     self.height = self.cellSize * self.rows
+    self.linesVisible = options.linesVisible == true
     self.x = self.width > self.virtualWidth
         and 0
         or math.floor((self.virtualWidth - self.width) / 2)
@@ -21,7 +22,24 @@ function ArenaGrid.new(options)
     return self
 end
 
+function ArenaGrid:setLinesVisible(visible)
+    self.linesVisible = visible == true
+end
+
+function ArenaGrid:toggleLines()
+    self.linesVisible = not self.linesVisible
+    return self.linesVisible
+end
+
+function ArenaGrid:areLinesVisible()
+    return self.linesVisible
+end
+
 function ArenaGrid:draw()
+    if not self.linesVisible then
+        return
+    end
+
     for row = 1, self.rows do
         for column = 1, self.columns do
             local x = self.x + (column - 1) * self.cellSize

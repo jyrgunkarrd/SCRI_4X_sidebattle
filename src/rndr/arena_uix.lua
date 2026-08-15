@@ -250,6 +250,43 @@ local function drawAttackProfile(profile, x, y, width, height)
     end
 end
 
+local function drawTagColumn(tags, x, y, width, height)
+    love.graphics.setColor(0.025, 0.03, 0.05, 0.94)
+    love.graphics.rectangle("fill", x, y, width, height, 4, 4)
+    love.graphics.setColor(0.3, 0.36, 0.48, 0.9)
+    love.graphics.setLineWidth(1)
+    love.graphics.rectangle(
+        "line",
+        x + 0.5,
+        y + 0.5,
+        width - 1,
+        height - 1,
+        4,
+        4
+    )
+
+    love.graphics.setColor(0.4, 0.78, 1, 1)
+    love.graphics.rectangle("fill", x, y, 5, height, 3, 3)
+    love.graphics.print("TAGS", x + 18, y + 12)
+
+    love.graphics.setColor(0.78, 0.84, 0.94, 1)
+    if type(tags) ~= "table" or #tags == 0 then
+        love.graphics.print("--", x + 18, y + 52)
+        return
+    end
+
+    local lineHeight = 29
+    for index, tagId in ipairs(tags) do
+        love.graphics.printf(
+            string.upper(tostring(tagId)),
+            x + 18,
+            y + 52 + (index - 1) * lineHeight,
+            width - 36,
+            "left"
+        )
+    end
+end
+
 function ArenaUIX.new(options)
     options = options or {}
 
@@ -438,6 +475,13 @@ function ArenaUIX:draw(unitDraw, enemyArenaSystem, movementSystem)
                 profileHeight
             )
         end
+        drawTagColumn(
+            self.displayedUnit.definition.tags,
+            profileX + #profiles * (profileWidth + profileGap),
+            profileY,
+            profileWidth,
+            profileHeight
+        )
     end
 
     love.graphics.setColor(1, 1, 1, 1)

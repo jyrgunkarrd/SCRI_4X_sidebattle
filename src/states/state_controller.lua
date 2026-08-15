@@ -45,6 +45,12 @@ function StateController:keypressed(key, scancode, isRepeat)
     end
 end
 
+function StateController:textinput(text)
+    if self.current and self.current.textinput then
+        self.current:textinput(text)
+    end
+end
+
 function StateController:mousepressed(x, y, button, isTouch, presses)
     if self.current and self.current.mousepressed then
         self.current:mousepressed(x, y, button, isTouch, presses)

@@ -16,6 +16,12 @@ return
             { img = "shank" },
 
         },
+        tags = {
+
+            "assault",
+            "meat",
+
+        },
         shout = {
 
             { select = "Popping smoke" },
@@ -32,7 +38,8 @@ return
         scale = 1.1,
         h_mov = 3,
         size = 3,
-        hp = 40,
+        hp = 60,
+        armor = 25,
         m_atk = {
 
             { dmg = 12 }, 
@@ -47,6 +54,14 @@ return
             { type = "multihit" },
             { dmg = 6 }, 
             { img = "sml_arms" },
+
+        },
+        tags = {
+
+            "assault",
+            "machine",
+            "droid",
+            "last war",
 
         },
         shout = {
@@ -65,7 +80,8 @@ return
         scale = 1.9,
         h_mov = 5,
         size = 4,
-        hp = 40,
+        hp = 65,
+        armor = 50,
         r_atk = {
 
             { rng_opt = 3 },
@@ -75,6 +91,13 @@ return
             { img = "hvy_arms" },
         },
         move_sfx = "veh",
+        tags = {
+
+            "vehicle",
+            "machine",
+            "last war",
+
+        },
         shout = {
 
             { select = "On station" },

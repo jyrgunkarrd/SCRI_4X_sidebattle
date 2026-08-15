@@ -21,6 +21,8 @@ local TurnSystem = require("src.sys.turn_sys")
 local CombatSystem = require("src.sys.combat_sys")
 local AttackVFX = require("src.rndr.attack_vfx")
 local ArenaAISystem = require("src.sys.arena_ai_sys")
+local TagDefinitions = require("data.tags")
+local TagSystem = require("src.sys.tag_sys")
 
 local BattleArena = {}
 BattleArena.__index = BattleArena
@@ -47,6 +49,7 @@ function BattleArena:enter()
         virtualWidth = VIRTUAL_WIDTH,
         virtualHeight = VIRTUAL_HEIGHT,
         anchor = "bottom",
+        linesVisible = false,
     })
     self.arenaEnvironmentBackground = ArenaEnvironmentBackground.fromLoader(
         ArenaEnvironments,
@@ -82,9 +85,11 @@ function BattleArena:enter()
         self.enemyArenaSystem,
         self.unitSystem
     )
+    self.tagSystem = TagSystem.new(TagDefinitions)
     self.combatSystem = CombatSystem.new({
         unitSystem = self.unitSystem,
         enemyArenaSystem = self.enemyArenaSystem,
+        tagSystem = self.tagSystem,
     })
     self.arenaAISystem = ArenaAISystem.new(
         self.arenaGrid,
@@ -637,6 +642,13 @@ function BattleArena:keypressed(key, _scancode, isRepeat)
             and not self.arenaMovementSystem:isMoving()
             and self.turnSystem:advancePlayerTurn() then
             self:_clearPlayerInteraction()
+        end
+        return
+    end
+
+    if key == "tab" then
+        if not isRepeat then
+            self.arenaGrid:toggleLines()
         end
         return
     end
