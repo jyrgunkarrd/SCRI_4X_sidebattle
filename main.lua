@@ -36,6 +36,10 @@ function love.draw()
     states:draw()
 end
 
+function love.quit()
+    return states:quit()
+end
+
 function love.wheelmoved(x, y)
     states:wheelmoved(x, y)
 end

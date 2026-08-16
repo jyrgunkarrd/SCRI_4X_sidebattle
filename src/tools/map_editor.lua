@@ -18,10 +18,21 @@ local LAYERS = {
         root = "assets/images/maptiles/hex_transitions",
         order = 2,
     },
+    road = {
+        label = "RIVER / ROAD / BRIDGE",
+        root = "assets/images/maptiles/river_road_bridge",
+        order = 3,
+    },
+    river = {
+        order = 4,
+    },
+    bridge = {
+        order = 5,
+    },
     overlay = {
         label = "HEX OVERLAY",
         root = "assets/images/maptiles/hex_overlays",
-        order = 3,
+        order = 6,
     },
 }
 local MARKER_TYPES = {
@@ -35,7 +46,7 @@ local TILE_CENTER_Y = 54
 local HEX_STEP_X = 72
 local HEX_STEP_Y = 84
 local HEX_STAGGER_Y = 42
-local HUD_HEIGHT = 104
+local HUD_HEIGHT = 128
 local CAMERA_SPEED = 720
 local MAP_ROOT = "assets/maps"
 
@@ -72,6 +83,14 @@ local function sortedValues(values)
         return left.r < right.r
     end)
     return result
+end
+
+local function nativeMapRoot()
+    local source = love.filesystem.getSource()
+    if source and not source:lower():match("%.love$") then
+        return source .. "/" .. MAP_ROOT
+    end
+    return love.filesystem.getSourceBaseDirectory() .. "/" .. MAP_ROOT
 end
 
 local function axialToCenter(q, r)
@@ -167,8 +186,10 @@ function MapEditor.new()
 end
 
 function MapEditor:enter()
-    self.canvas = love.graphics.newCanvas(VIRTUAL_WIDTH, VIRTUAL_HEIGHT)
-    self.canvas:setFilter("nearest", "nearest")
+    self.mapCanvas = love.graphics.newCanvas(VIRTUAL_WIDTH, VIRTUAL_HEIGHT)
+    self.mapCanvas:setFilter("nearest", "nearest")
+    self.uiCanvas = love.graphics.newCanvas(VIRTUAL_WIDTH, VIRTUAL_HEIGHT)
+    self.uiCanvas:setFilter("linear", "linear")
     self.outputScale = 1
     self.outputOffsetX = 0
     self.outputOffsetY = 0
@@ -176,18 +197,22 @@ function MapEditor:enter()
     self.cameraY = -VIRTUAL_HEIGHT / 2
     self.layerCatalogs = {}
     for layerName, layer in pairs(LAYERS) do
-        local folders = discoverFolders(layer.root)
-        assert(#folders > 0,
-            ("No map tile folders found in %s"):format(layer.root))
-        self.layerCatalogs[layerName] = {
-            folders = folders,
-            folderIndex = 1,
-            tileIndex = 1,
-        }
+        if layer.root then
+            local folders = discoverFolders(layer.root)
+            assert(#folders > 0,
+                ("No map tile folders found in %s"):format(layer.root))
+            self.layerCatalogs[layerName] = {
+                folders = folders,
+                folderIndex = 1,
+                tileIndex = 1,
+            }
+        end
     end
     self.activeMode = "base"
     self.imageCache = {}
-    self.tiles = { base = {}, transition = {}, overlay = {} }
+    self.tiles = {
+        base = {}, transition = {}, road = {}, river = {}, bridge = {}, overlay = {},
+    }
     self.markers = { terrain = {}, resource = {}, site = {} }
     self.markerTypeIndex = 1
     self.markerCount = 0
@@ -198,6 +223,8 @@ function MapEditor:enter()
     self.nameInput = nil
     self.loadPanel = nil
     self.statusMessage = nil
+    self.dirty = false
+    self.exitPrompt = false
     self.tileCount = 0
     self.sortedTiles = {}
     self.drawOrderDirty = false
@@ -228,6 +255,19 @@ function MapEditor:_currentTileAsset()
         name = fileName,
         path = folder.path .. "/" .. fileName,
     }
+end
+
+function MapEditor:_activePaintLayer()
+    if self.activeMode ~= "road" then
+        return self.activeMode
+    end
+    local folderName = self:_currentFolder().name:lower()
+    if folderName:find("bridge", 1, true) then
+        return "bridge"
+    elseif folderName:find("river", 1, true) then
+        return "river"
+    end
+    return "road"
 end
 
 function MapEditor:_getImage(path)
@@ -278,6 +318,7 @@ end
 function MapEditor:_markMapChanged()
     self.drawOrderDirty = true
     self.boundsDirty = true
+    self.dirty = true
 end
 
 function MapEditor:_paint(q, r)
@@ -287,7 +328,8 @@ function MapEditor:_paint(q, r)
     end
 
     local key = hexKey(q, r)
-    local layerTiles = self.tiles[self.activeMode]
+    local paintLayer = self:_activePaintLayer()
+    local layerTiles = self.tiles[paintLayer]
     local tile = layerTiles[key]
     if not tile then
         tile = { q = q, r = r }
@@ -301,8 +343,8 @@ function MapEditor:_paint(q, r)
     tile.folder = asset.folder
     tile.name = asset.name
     tile.path = asset.path
-    tile.layer = self.activeMode
-    tile.layerOrder = LAYERS[self.activeMode].order
+    tile.layer = paintLayer
+    tile.layerOrder = LAYERS[paintLayer].order
     tile.image = self:_getImage(asset.path)
     tile.centerX = centerX
     tile.centerY = centerY
@@ -314,7 +356,7 @@ end
 
 function MapEditor:_erase(q, r)
     local key = hexKey(q, r)
-    local layerTiles = self.tiles[self.activeMode]
+    local layerTiles = self.tiles[self:_activePaintLayer()]
     if not layerTiles[key] then
         return false
     end
@@ -384,7 +426,7 @@ function MapEditor:_pickAt(q, r)
         end
         self.copiedMarkerString = marker.value
     else
-        local tile = self.tiles[self.activeMode][key]
+        local tile = self.tiles[self:_activePaintLayer()][key]
         if not tile then
             return false
         end
@@ -406,13 +448,14 @@ function MapEditor:_pickAt(q, r)
     return true
 end
 
-function MapEditor:_beginNameInput(saveAfterNaming)
+function MapEditor:_beginNameInput(saveAfterNaming, quitAfterSave)
     self.paintButton = nil
     self.lastToolQ = nil
     self.lastToolR = nil
     self.nameInput = {
         value = self.mapName or "",
         saveAfterNaming = saveAfterNaming == true,
+        quitAfterSave = quitAfterSave == true,
     }
     love.keyboard.setTextInput(true)
 end
@@ -429,9 +472,12 @@ function MapEditor:_finishNameInput(save)
         self.statusMessage = "MAP NAME CANNOT BE EMPTY"
         return
     end
-    self.mapName = name
+    if self.mapName ~= name then
+        self.mapName = name
+        self.dirty = true
+    end
     if input.saveAfterNaming then
-        self:_saveMap()
+        self:_saveMap(input.quitAfterSave)
     end
 end
 
@@ -442,7 +488,9 @@ function MapEditor:_mapSource()
         ("    name = %q,"):format(self.mapName),
         "    tiles = {",
     }
-    for _, layerName in ipairs({ "base", "transition", "overlay" }) do
+    for _, layerName in ipairs({
+        "base", "transition", "road", "river", "bridge", "overlay",
+    }) do
         for _, tile in ipairs(sortedValues(self.tiles[layerName])) do
             lines[#lines + 1] = ("        { layer = %q, q = %d, r = %d, folder = %q, name = %q, path = %q },")
                 :format(layerName, tile.q, tile.r, tile.folder, tile.name, tile.path)
@@ -461,21 +509,30 @@ function MapEditor:_mapSource()
     return table.concat(lines, "\n") .. "\n"
 end
 
-function MapEditor:_saveMap()
+function MapEditor:_saveMap(quitAfterSave)
     if not self.mapName then
-        self:_beginNameInput(true)
+        self:_beginNameInput(true, quitAfterSave)
         return
     end
-    local baseDirectory = love.filesystem.getSourceBaseDirectory()
-    local path = baseDirectory .. "/" .. MAP_ROOT .. "/" .. mapFileName(self.mapName)
+    local path = nativeMapRoot() .. "/" .. mapFileName(self.mapName)
     local file, errorMessage = io.open(path, "wb")
     if not file then
         self.statusMessage = "SAVE FAILED: " .. tostring(errorMessage)
+            .. "  [" .. path .. "]"
         return
     end
-    file:write(self:_mapSource())
-    file:close()
+    local writeSucceeded, writeError = file:write(self:_mapSource())
+    local closeSucceeded, closeError = file:close()
+    if not writeSucceeded or closeSucceeded == nil then
+        self.statusMessage = "SAVE FAILED: "
+            .. tostring(writeError or closeError or "WRITE ERROR")
+        return
+    end
+    self.dirty = false
     self.statusMessage = "SAVED  " .. mapFileName(self.mapName)
+    if quitAfterSave then
+        love.event.quit()
+    end
 end
 
 function MapEditor:_showLoadPanel()
@@ -507,7 +564,9 @@ function MapEditor:_loadMap(fileName)
         return false
     end
 
-    local tiles = { base = {}, transition = {}, overlay = {} }
+    local tiles = {
+        base = {}, transition = {}, road = {}, river = {}, bridge = {}, overlay = {},
+    }
     local markers = { terrain = {}, resource = {}, site = {} }
     local tileCount, markerCount = 0, 0
     for _, savedTile in ipairs(map.tiles or {}) do
@@ -546,6 +605,7 @@ function MapEditor:_loadMap(fileName)
         or fileName:gsub("%.lua$", "")
     self.loadPanel = nil
     self:_markMapChanged()
+    self.dirty = false
     self.statusMessage = "LOADED  " .. fileName
     return true
 end
@@ -652,7 +712,7 @@ function MapEditor:getMapBounds()
 end
 
 function MapEditor:update(dt)
-    if self.markerInput or self.nameInput or self.loadPanel then
+    if self.markerInput or self.nameInput or self.loadPanel or self.exitPrompt then
         return
     end
     local horizontal = 0
@@ -695,7 +755,8 @@ function MapEditor:_ghostTile()
     end
 
     local centerX, centerY = axialToCenter(self.hoverQ, self.hoverR)
-    local existing = self.tiles[self.activeMode][hexKey(self.hoverQ, self.hoverR)]
+    local paintLayer = self:_activePaintLayer()
+    local existing = self.tiles[paintLayer][hexKey(self.hoverQ, self.hoverR)]
     local image
     local erasing = self.paintButton == 2
     if erasing then
@@ -714,7 +775,7 @@ function MapEditor:_ghostTile()
         centerY = centerY,
         drawX = centerX - TILE_CENTER_X,
         drawY = centerY - TILE_CENTER_Y,
-        layerOrder = LAYERS[self.activeMode].order,
+        layerOrder = LAYERS[paintLayer].order,
         isGhost = true,
         erasing = erasing,
     }
@@ -749,6 +810,14 @@ function MapEditor:_drawMap()
         love.graphics.draw(tile.image, tile.drawX, tile.drawY)
     end
 
+    love.graphics.pop()
+    love.graphics.setColor(1, 1, 1, 1)
+end
+
+function MapEditor:_drawMarkers()
+    local cameraX, cameraY = self:_renderCameraPosition()
+    love.graphics.push()
+    love.graphics.translate(-cameraX, -cameraY)
     for _, markerType in ipairs(MARKER_TYPES) do
         for _, marker in pairs(self.markers[markerType.name]) do
             local centerX, centerY = axialToCenter(marker.q, marker.r)
@@ -815,12 +884,13 @@ function MapEditor:_drawHUD()
     )
 
     love.graphics.setColor(0.7, 0.78, 0.9, 1)
-    love.graphics.print("B BASE   T TRANSITION   O OVERLAY   M MARKER", 560, 20)
+    love.graphics.print("B BASE   T TRANSITION   R RIVER/ROAD/BRIDGE   O OVERLAY   M MARKER", 460, 20)
     love.graphics.print("[ ] FOLDER   , . ITEM   P PICKER   LMB PAINT   RMB ERASE", 560, 52)
     love.graphics.print("WASD / ARROWS PAN   MMB DRAG PAN", 1180, 36)
     love.graphics.print("E SAVE   N NAME   L LOAD", 1180, 66)
     love.graphics.setColor(0.9, 0.94, 1, 1)
-    love.graphics.print("NAME  " .. (self.mapName or "UNTITLED"), 20, 88)
+    love.graphics.print("NAME  " .. (self.mapName or "UNTITLED")
+        .. (self.dirty and "  *" or ""), 20, 88)
     if self.statusMessage then
         love.graphics.setColor(1, 0.82, 0.25, 1)
         love.graphics.print(self.statusMessage, 560, 76)
@@ -943,14 +1013,36 @@ function MapEditor:_drawLoadPanel()
     love.graphics.print("UP/DOWN SELECT    ENTER LOAD    ESC CANCEL", x + 24, y + height - 42)
 end
 
+function MapEditor:_drawExitPrompt()
+    if not self.exitPrompt then
+        return
+    end
+    local width, height = 720, 180
+    local x = (VIRTUAL_WIDTH - width) / 2
+    local y = (VIRTUAL_HEIGHT - height) / 2
+    love.graphics.setColor(0.025, 0.035, 0.06, 0.98)
+    love.graphics.rectangle("fill", x, y, width, height)
+    love.graphics.setColor(1, 0.62, 0.24, 1)
+    love.graphics.rectangle("line", x + 0.5, y + 0.5, width - 1, height - 1)
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.print("SAVE CHANGES BEFORE EXITING?", x + 24, y + 28)
+    love.graphics.setColor(0.7, 0.78, 0.9, 1)
+    love.graphics.print("Y SAVE    N DISCARD    ESC CANCEL", x + 24, y + 92)
+end
+
 function MapEditor:draw()
-    love.graphics.setCanvas(self.canvas)
+    love.graphics.setCanvas(self.mapCanvas)
     love.graphics.clear(0.035, 0.045, 0.065, 1)
     self:_drawMap()
+
+    love.graphics.setCanvas(self.uiCanvas)
+    love.graphics.clear(0, 0, 0, 0)
+    self:_drawMarkers()
     self:_drawHUD()
     self:_drawMarkerInput()
     self:_drawNameInput()
     self:_drawLoadPanel()
+    self:_drawExitPrompt()
     love.graphics.setCanvas()
 
     local windowWidth, windowHeight = love.graphics.getDimensions()
@@ -967,7 +1059,15 @@ function MapEditor:draw()
     love.graphics.clear(0, 0, 0, 1)
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.draw(
-        self.canvas,
+        self.mapCanvas,
+        self.outputOffsetX,
+        self.outputOffsetY,
+        0,
+        scale,
+        scale
+    )
+    love.graphics.draw(
+        self.uiCanvas,
         self.outputOffsetX,
         self.outputOffsetY,
         0,
@@ -977,6 +1077,19 @@ function MapEditor:draw()
 end
 
 function MapEditor:keypressed(key, _scancode, isRepeat)
+    if self.exitPrompt then
+        if key == "y" then
+            self.exitPrompt = false
+            self:_saveMap(true)
+        elseif key == "n" then
+            self.exitPrompt = false
+            self.allowQuit = true
+            love.event.quit()
+        elseif key == "escape" then
+            self.exitPrompt = false
+        end
+        return
+    end
     if self.markerInput then
         if key == "return" or key == "kpenter" then
             self:_finishMarkerInput(true)
@@ -1019,9 +1132,13 @@ function MapEditor:keypressed(key, _scancode, isRepeat)
         end
         return
     end
-
     if key == "escape" then
-        love.event.quit()
+        if self.dirty then
+            self.paintButton = nil
+            self.exitPrompt = true
+        else
+            love.event.quit()
+        end
     elseif not isRepeat and key == "e" then
         self:_saveMap()
     elseif not isRepeat and key == "n" then
@@ -1061,6 +1178,12 @@ function MapEditor:keypressed(key, _scancode, isRepeat)
         self.lastToolR = nil
     elseif not isRepeat and key == "t" then
         self.activeMode = "transition"
+        self.pickerActive = false
+        self.paintButton = nil
+        self.lastToolQ = nil
+        self.lastToolR = nil
+    elseif not isRepeat and key == "r" then
+        self.activeMode = "road"
         self.pickerActive = false
         self.paintButton = nil
         self.lastToolQ = nil
@@ -1108,7 +1231,7 @@ function MapEditor:mousepressed(x, y, button)
         end
         return
     end
-    if self.markerInput or self.nameInput then
+    if self.markerInput or self.nameInput or self.exitPrompt then
         return
     end
     if button == 3 then
@@ -1159,7 +1282,7 @@ function MapEditor:mousereleased(_x, _y, button)
 end
 
 function MapEditor:mousemoved(x, y, dx, dy)
-    if self.markerInput or self.nameInput or self.loadPanel then
+    if self.markerInput or self.nameInput or self.loadPanel or self.exitPrompt then
         return
     end
     if self.middleDragging then
@@ -1172,11 +1295,21 @@ end
 
 function MapEditor:exit()
     love.keyboard.setTextInput(false)
-    self.canvas = nil
+    self.mapCanvas = nil
+    self.uiCanvas = nil
     self.tiles = {}
     self.markers = {}
     self.sortedTiles = {}
     self.imageCache = {}
+end
+
+function MapEditor:quit()
+    if self.dirty and not self.allowQuit then
+        self.paintButton = nil
+        self.exitPrompt = true
+        return true
+    end
+    return false
 end
 
 return MapEditor

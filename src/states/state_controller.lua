@@ -33,6 +33,13 @@ function StateController:draw()
     end
 end
 
+function StateController:quit()
+    if self.current and self.current.quit then
+        return self.current:quit()
+    end
+    return false
+end
+
 function StateController:wheelmoved(x, y)
     if self.current and self.current.wheelmoved then
         self.current:wheelmoved(x, y)

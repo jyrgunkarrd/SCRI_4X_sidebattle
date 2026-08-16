@@ -1,0 +1,7 @@
+return
+
+{
+
+    mapid = "map001",
+
+}

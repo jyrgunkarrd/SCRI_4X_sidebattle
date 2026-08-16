@@ -1,6 +1,41 @@
 return
 {
 
+    -- Agents --
+
+    {
+
+        id = "mam",
+        name = "Mammoth",
+        scale = 1.2,
+        h_mov = 4,
+        size = 2,
+        hp = 40,
+        m_atk = {
+
+            { type = "multihit" },
+            { dmg = 6 }, 
+            { img = "shank" },
+
+        },
+        tags = {
+
+            "assault",
+            "demon",
+            "lex",
+
+        },
+        shout = {
+
+            { select = "As a river bends" },
+
+        },
+        def_sfx = "fem", 
+
+    },
+
+    -- Units -- 
+
     {
 
         id = "blakber",
