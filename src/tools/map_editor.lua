@@ -58,7 +58,7 @@ local function wrapIndex(index, count)
 end
 
 local function hexKey(q, r)
-    return q .. ":" .. r
+    return ("%d:%d"):format(q, r)
 end
 
 local function mapFileName(name)
@@ -115,6 +115,11 @@ local function roundAxial(fractionalQ, fractionalR)
     else
         roundedZ = -roundedX - roundedY
     end
+    -- Cube correction can create IEEE negative zero at the origin. Numeric
+    -- zero compares normally, but its string form can produce a different
+    -- lookup key on some Lua runtimes.
+    if roundedX == 0 then roundedX = 0 end
+    if roundedZ == 0 then roundedZ = 0 end
     return roundedX, roundedZ
 end
 

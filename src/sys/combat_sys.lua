@@ -115,22 +115,7 @@ function CombatSystem:getTagDamageContext(attacker, target, attack)
 end
 
 function CombatSystem:isFlankingAttack(attacker, target)
-    if not attacker or not target then
-        return false
-    end
-
-    if self.enemyArenaSystem:isFlanking(attacker)
-        and attacker.engagedWith == target then
-        return true
-    end
-
-    -- Movement previews run before the engagement is recorded. A unit joining
-    -- an already-occupied target will be marked as flanking when it arrives.
-    return not self:isUnitEngaged(attacker)
-        and self.enemyArenaSystem:isEnemy(attacker)
-            ~= self.enemyArenaSystem:isEnemy(target)
-        and self.enemyArenaSystem:canEngage(target)
-        and self.enemyArenaSystem:isOccupied(target)
+    return attacker ~= nil and target ~= nil and target.occupied == true
 end
 
 function CombatSystem:getMeleeArmorContext(attacker, target)
@@ -176,10 +161,6 @@ function CombatSystem:getRangedHitCount(unit, movementCost)
         self:getRangedAttack(unit),
         movementCost
     )
-end
-
-function CombatSystem:isUnitEngaged(unit)
-    return self.enemyArenaSystem:isEngaged(unit)
 end
 
 function CombatSystem:getCellRange(attacker, target)
@@ -270,11 +251,17 @@ function CombatSystem:canRangedAttack(attacker, target)
     if not attacker or not target or attacker == target
         or attacker.exhausted or (attacker.hp or 0) <= 0
         or (target.hp or 0) <= 0
-        or self:isUnitEngaged(attacker)
         or (attacker.targW == target.targW
             and attacker.targH == target.targH)
         or self.enemyArenaSystem:isEnemy(attacker)
             == self.enemyArenaSystem:isEnemy(target) then
+        return false
+    end
+
+    if self.enemyArenaSystem:cellHasBlockingHostile(
+        self.unitSystem:getUnits(),
+        attacker
+    ) then
         return false
     end
 
@@ -393,20 +380,15 @@ function CombatSystem:canMeleeAttack(attacker, target)
 
     local attack = self:getMeleeAttack(attacker)
     local damage = tonumber(attackProperty(attack, "dmg"))
-    local engaged = attacker.engagedWith == target
-        or target.engagedWith == attacker
-    return damage ~= nil and damage > 0 and engaged
+    local opposingFactions = self.enemyArenaSystem:isEnemy(attacker)
+        ~= self.enemyArenaSystem:isEnemy(target)
+    local sharesCell = attacker.targW == target.targW
+        and attacker.targH == target.targH
+    return damage ~= nil and damage > 0 and opposingFactions and sharesCell
 end
 
 function CombatSystem:_defeatUnit(unit)
     unit.hp = 0
-    self.enemyArenaSystem:disengage(unit)
-    local engagers = self.enemyArenaSystem:getEngagers(unit)
-    for _, engager in ipairs(engagers) do
-        engager.engagedWith = nil
-        engager.flanking = false
-    end
-    unit.engagedBy = {}
     self.unitSystem:remove(unit)
 end
 
@@ -454,6 +436,10 @@ function CombatSystem:performMeleeAttack(attacker, target)
     end
 
     attacker.exhausted = true
+    attacker.occupied = true
+    if result.totalDamage > 0 then
+        target.occupied = true
+    end
     if target.hp <= 0 then
         result.defeated = true
         target.defeated = true
@@ -473,9 +459,11 @@ function CombatSystem:canRetaliate(attacker, target)
 
     local attack = self:getMeleeAttack(attacker)
     local damage = tonumber(attackProperty(attack, "dmg"))
-    local engaged = attacker.engagedWith == target
-        or target.engagedWith == attacker
-    return damage ~= nil and damage > 0 and engaged
+    local opposingFactions = self.enemyArenaSystem:isEnemy(attacker)
+        ~= self.enemyArenaSystem:isEnemy(target)
+    local sharesCell = attacker.targW == target.targW
+        and attacker.targH == target.targH
+    return damage ~= nil and damage > 0 and opposingFactions and sharesCell
 end
 
 function CombatSystem:performRetaliation(attacker, target)
@@ -515,6 +503,10 @@ function CombatSystem:performRetaliation(attacker, target)
 
     attacker.retaliateAvailable = false
     target.hp = math.max(0, target.hp - damage)
+    attacker.occupied = true
+    if damage > 0 then
+        target.occupied = true
+    end
     if target.hp <= 0 then
         result.defeated = true
         target.defeated = true

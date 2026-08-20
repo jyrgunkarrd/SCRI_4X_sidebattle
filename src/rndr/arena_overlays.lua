@@ -7,6 +7,7 @@ local UNIT_TREATMENT_SHADER = [[
 extern vec3 flashColor;
 extern number flashAmount;
 extern number statusBrightness;
+extern number exhaustionSilhouette;
 extern vec3 damageColor;
 extern number damageLevel;
 extern number exhaustionDesaturation;
@@ -16,6 +17,7 @@ extern number defeatWipe;
 vec4 effect(vec4 vertexColor, Image texture, vec2 textureCoordinates, vec2 screenCoordinates)
 {
     vec4 pixel = Texel(texture, textureCoordinates) * vertexColor;
+    pixel.rgb = mix(pixel.rgb, vec3(0.0), exhaustionSilhouette);
 
     number damageEdge = 0.006;
     number damageMask = smoothstep(
@@ -90,6 +92,7 @@ function ArenaOverlays:beginUnitDim()
     self.unitTreatmentShader:send("flashColor", { 1, 1, 1 })
     self.unitTreatmentShader:send("flashAmount", 0)
     self.unitTreatmentShader:send("statusBrightness", self.cellDimBrightness)
+    self.unitTreatmentShader:send("exhaustionSilhouette", 0)
     self.unitTreatmentShader:send("damageColor", { 0xd4 / 255, 0, 0 })
     self.unitTreatmentShader:send("damageLevel", 0)
     self.unitTreatmentShader:send("exhaustionDesaturation", 0)
@@ -102,24 +105,29 @@ function ArenaOverlays:endUnitDim()
     love.graphics.setShader()
 end
 
-function ArenaOverlays:beginUnitStatus(unit, enemyArenaSystem, dimmed)
-    local isExhaustedPlayer = not enemyArenaSystem:isEnemy(unit)
-        and unit.exhausted == true
-    local color
-    if enemyArenaSystem:isFlanking(unit) then
-        color = { 0x2e / 255, 0xff / 255, 0xb9 / 255 }
-    elseif enemyArenaSystem:isFlanked(unit) then
-        color = { 0xff / 255, 0x42 / 255, 0x42 / 255 }
-    end
-
-    local pulse = color and (0.18 + 0.32
-        * (0.5 + 0.5 * math.sin(self.animationTime * 3.5))) or 0
+function ArenaOverlays:beginUnitStatus(unit, enemyArenaSystem, dimmed, isSelected)
+    local isExhausted = unit.exhausted == true
+    local usesSelectedExhaustionTreatment = isExhausted and isSelected == true
+    local usesExhaustionSilhouette = isExhausted and not isSelected
+    local impactFlash = unit.attackVfxFlashAmount or 0
+    local color = impactFlash > 0
+        and { 0xff / 255, 0xd4 / 255, 0x31 / 255 }
+        or (unit.occupied and { 0xfe / 255, 0, 0x6d / 255 } or nil)
+    local pulse = impactFlash > 0
+        and impactFlash
+        or (color and (0.18 + 0.32
+            * (0.5 + 0.5 * math.sin(self.animationTime * 3.5))) or 0)
     self.unitTreatmentShader:send("flashColor", color or { 1, 1, 1 })
     self.unitTreatmentShader:send("flashAmount", pulse)
     self.unitTreatmentShader:send(
         "statusBrightness",
         (dimmed and self.cellDimBrightness or 1)
-            * (isExhaustedPlayer and self.exhaustedBrightness or 1)
+            * (usesSelectedExhaustionTreatment
+                and self.exhaustedBrightness or 1)
+    )
+    self.unitTreatmentShader:send(
+        "exhaustionSilhouette",
+        usesExhaustionSilhouette and 1 or 0
     )
     self.unitTreatmentShader:send("damageColor", { 0xd4 / 255, 0, 0 })
     self.unitTreatmentShader:send(
@@ -128,7 +136,7 @@ function ArenaOverlays:beginUnitStatus(unit, enemyArenaSystem, dimmed)
     )
     self.unitTreatmentShader:send(
         "exhaustionDesaturation",
-        isExhaustedPlayer and self.exhaustedDesaturation or 0
+        usesSelectedExhaustionTreatment and self.exhaustedDesaturation or 0
     )
     self.unitTreatmentShader:send("defeatFlash", unit.defeatFlashAmount or 0)
     self.unitTreatmentShader:send("defeatWipe", unit.defeatWipeAmount or 0)
@@ -141,10 +149,10 @@ function ArenaOverlays:endUnitStatus()
 end
 
 function ArenaOverlays:_cellRect(grid, destination)
-    local x = grid.x + (destination.targW - 1) * grid.cellSize
+    local x = grid.x + (destination.targW - 1) * grid.cellWidth
     local visualRow = grid.rows - destination.targH
-    local y = grid.y + visualRow * grid.cellSize
-    return x, y, grid.cellSize
+    local y = grid.y + visualRow * grid.cellHeight
+    return x, y, grid.cellWidth, grid.cellHeight
 end
 
 function ArenaOverlays:drawMovement(movementSystem, unitDraw)
@@ -157,16 +165,16 @@ function ArenaOverlays:drawMovement(movementSystem, unitDraw)
     local hoveredDestination = movementSystem:getHoveredDestination()
 
     for _, destination in ipairs(movementSystem:getDestinations()) do
-        local x, y, size = self:_cellRect(grid, destination)
+        local x, y, width, height = self:_cellRect(grid, destination)
         local isHovered = destination == hoveredDestination
 
         love.graphics.setColor(
-            destination.requiresEngagement and 0.9 or (isHovered and 0.28 or 0.16),
-            destination.requiresEngagement and 0.42 or (isHovered and 0.72 or 0.55),
-            destination.requiresEngagement and 0.2 or 1,
+            destination.requiresMeleeTarget and 0.9 or (isHovered and 0.28 or 0.16),
+            destination.requiresMeleeTarget and 0.42 or (isHovered and 0.72 or 0.55),
+            destination.requiresMeleeTarget and 0.2 or 1,
             isHovered and 0.24 or 0.14
         )
-        love.graphics.rectangle("fill", x, y, size, size)
+        love.graphics.rectangle("fill", x, y, width, height)
     end
 
     if hoveredDestination and (hoveredDestination.movementCost or 0) > 0 then
@@ -175,15 +183,9 @@ function ArenaOverlays:drawMovement(movementSystem, unitDraw)
             selectedUnit.targW,
             selectedUnit.targH
         )
-        local engagementTarget = movementSystem:getHoveredEngagement()
-        local previewsFlank = engagementTarget
-            and movementSystem.enemyArenaSystem:isOccupied(engagementTarget)
-        local ghostCellOffset
-        if previewsFlank then
-            ghostCellOffset = grid.cellSize / 4
-        elseif #hoveredDestination.enemies > 0 then
-            ghostCellOffset = -grid.cellSize / 4
-        end
+        local ghostCellOffset = movementSystem.enemyArenaSystem:getSlotOffset(
+            hoveredDestination.arenaSlot or selectedUnit.arenaSlot
+        )
         local ghostImage, ghostX, ghostY, ghostScale = unitDraw:getUnitVisualAt(
             selectedUnit,
             hoveredDestination.targW,
@@ -257,56 +259,6 @@ function ArenaOverlays:drawRangedAttackLine(attacker, target, unitDraw)
     love.graphics.setColor(1, 1, 1, 1)
 end
 
-function ArenaOverlays:drawEngagementCapacity(movementSystem, unitDraw, camera)
-    local enemy = movementSystem:getHoveredEngagement()
-    if not enemy then
-        return
-    end
-
-    local enemyArenaSystem = movementSystem.enemyArenaSystem
-    local size = enemyArenaSystem:getSize(enemy)
-    local engagedSize = math.min(size, enemyArenaSystem:getEngagedSize(enemy))
-    local incomingSize = movementSystem.selectedUnit
-        and enemyArenaSystem:getSize(movementSystem.selectedUnit)
-        or 0
-    local previewSize = math.min(size, engagedSize + incomingSize)
-    local occupied = enemyArenaSystem:isOccupied(enemy)
-    local left, top, right = unitDraw:getUnitBounds(enemy)
-    local centerX, screenTop = camera:worldToScreen((left + right) / 2, top)
-    local pipSize = 12
-    local gap = 4
-    local totalWidth = size * pipSize + (size - 1) * gap
-    local startX = centerX - totalWidth / 2
-    local y = screenTop - pipSize - 14
-    local flashAlpha = 0.35 + 0.65
-        * (0.5 + 0.5 * math.sin(self.animationTime * 9))
-
-    for index = 1, size do
-        local x = math.floor(startX + (index - 1) * (pipSize + gap) + 0.5)
-        local drawY = math.floor(y + 0.5)
-        love.graphics.setColor(0.8, 0.9, 1, 0.95)
-        love.graphics.rectangle("fill", x, drawY, pipSize, pipSize)
-
-        love.graphics.setColor(0.025, 0.035, 0.055, 0.95)
-        love.graphics.rectangle("fill", x + 2, drawY + 2, pipSize - 4, pipSize - 4)
-
-        if index <= engagedSize then
-            love.graphics.setColor(
-                occupied and 0.3 or 0.96,
-                occupied and 0.86 or 0.56,
-                occupied and 0.46 or 0.2,
-                1
-            )
-            love.graphics.rectangle("fill", x + 2, drawY + 2, pipSize - 4, pipSize - 4)
-        elseif index <= previewSize then
-            love.graphics.setColor(1, 0.58, 0.18, flashAlpha)
-            love.graphics.rectangle("fill", x + 2, drawY + 2, pipSize - 4, pipSize - 4)
-        end
-    end
-
-    love.graphics.setColor(1, 1, 1, 1)
-end
-
 local function drawPanelBacking(x, y, width, height)
     love.graphics.setColor(0.012, 0.018, 0.03, 0.94)
     love.graphics.rectangle("fill", x, y, width, height, 4, 4)
@@ -326,6 +278,20 @@ local function drawHitPips(centerX, y, count)
         love.graphics.setColor(1, 0.58, 0.18, 1)
         love.graphics.rectangle("fill", x, y, pipSize, pipSize)
     end
+end
+
+local function hitPipsWidth(count)
+    local pipSize = 8
+    local gap = 4
+    return count * pipSize + math.max(0, count - 1) * gap
+end
+
+local function drawCenteredText(font, text, x, y, width)
+    love.graphics.print(
+        text,
+        math.floor(x + (width - font:getWidth(text)) / 2 + 0.5),
+        y
+    )
 end
 
 local function drawPreviewHPGauge(preview, x, y, width, height)
@@ -374,7 +340,7 @@ function ArenaOverlays:drawAttackPreview(
     rangedTarget,
     rangedPreview
 )
-    local enemy = rangedTarget or movementSystem:getHoveredEngagement()
+    local enemy = rangedTarget or movementSystem:getHoveredMeleeTarget()
     local selectedUnit = movementSystem.selectedUnit
     if not enemy or not selectedUnit then
         return
@@ -396,11 +362,40 @@ function ArenaOverlays:drawAttackPreview(
         return
     end
 
+    local damageText
+    if preview.armor > 0 then
+        damageText = ("DMG  %d  >  %d"):format(
+            preview.rawDamage,
+            preview.damagePerHit
+        )
+    else
+        damageText = ("DMG  %d"):format(preview.rawDamage)
+    end
+    local chanceText = preview.hitChance
+        and ("HIT %d%%"):format(preview.hitChance)
+        or nil
+    local hpText = ("HP  %d / %d"):format(
+        preview.currentHP,
+        preview.maximumHP
+    )
+    local pipWidth = preview.isMultihit
+        and hitPipsWidth(preview.hitCount)
+        or 0
+    local detailWidth = chanceText and preview.isMultihit
+        and self.font:getWidth(chanceText) + pipWidth + 40
+        or (chanceText and self.font:getWidth(chanceText) + 24
+            or (preview.isMultihit and pipWidth + 24 or 0))
+
     local left, top, right = unitDraw:getUnitBounds(enemy)
     local centerX, screenTop = camera:worldToScreen((left + right) / 2, top)
-    local panelWidth = 148
-    local panelHeight = 62
-    local panelGap = 8
+    local panelWidth = math.max(
+        190,
+        self.font:getWidth(damageText) + 24,
+        self.font:getWidth(hpText) + 24,
+        detailWidth
+    )
+    local panelHeight = 84
+    local panelGap = 10
     local rowWidth = panelWidth * 2 + panelGap
     local panelX = math.max(
         8,
@@ -416,59 +411,62 @@ function ArenaOverlays:drawAttackPreview(
     drawPanelBacking(panelX, panelY, panelWidth, panelHeight)
     drawPanelBacking(healthX, panelY, panelWidth, panelHeight)
 
-    local damageText
-    if preview.armor > 0 then
-        damageText = ("DMG  %d  >  %d"):format(
-            preview.rawDamage,
-            preview.damagePerHit
-        )
-    else
-        damageText = ("DMG  %d"):format(preview.rawDamage)
-    end
+    local topRowY = panelY + 12
+    local detailCenterY = panelY + 57
+    local detailTextY = math.floor(
+        detailCenterY - self.font:getHeight() / 2 + 0.5
+    )
     love.graphics.setColor(0.9, 0.94, 1, 1)
-    love.graphics.printf(
+    drawCenteredText(
+        self.font,
         damageText,
-        panelX + 6,
-        panelY + ((preview.isMultihit or preview.hitChance) and 9 or 23),
-        panelWidth - 12,
-        "center"
+        panelX,
+        (preview.isMultihit or preview.hitChance)
+            and topRowY
+            or math.floor(panelY + (panelHeight - self.font:getHeight()) / 2),
+        panelWidth
     )
     if preview.hitChance then
-        local chanceText = ("HIT %d%%"):format(preview.hitChance)
         if preview.isMultihit then
             love.graphics.setColor(1, 0x42 / 255, 0x42 / 255, 1)
-            love.graphics.printf(
+            love.graphics.print(
                 chanceText,
-                panelX + 8,
-                panelY + 35,
-                90,
-                "left"
+                panelX + 12,
+                detailTextY
             )
-            drawHitPips(panelX + 121, panelY + 40, preview.hitCount)
+            drawHitPips(
+                panelX + panelWidth - 12 - pipWidth / 2,
+                math.floor(detailCenterY - 4 + 0.5),
+                preview.hitCount
+            )
         else
             love.graphics.setColor(1, 0x42 / 255, 0x42 / 255, 1)
-            love.graphics.printf(
+            drawCenteredText(
+                self.font,
                 chanceText,
-                panelX + 6,
-                panelY + 35,
-                panelWidth - 12,
-                "center"
+                panelX,
+                detailTextY,
+                panelWidth
             )
         end
     elseif preview.isMultihit then
-        drawHitPips(panelX + panelWidth / 2, panelY + 40, preview.hitCount)
+        drawHitPips(
+            panelX + panelWidth / 2,
+            math.floor(detailCenterY - 4 + 0.5),
+            preview.hitCount
+        )
     end
 
     love.graphics.setColor(0.9, 0.94, 1, 1)
-    love.graphics.printf(
-        ("HP  %d / %d"):format(preview.currentHP, preview.maximumHP),
-        healthX + 6,
-        panelY + 7,
-        panelWidth - 12,
-        "center"
+    drawCenteredText(
+        self.font,
+        hpText,
+        healthX,
+        topRowY,
+        panelWidth
     )
     if preview.willDefeat then
-        local iconSize = 25
+        local iconSize = 27
         local iconScale = math.min(
             iconSize / self.killIcon:getWidth(),
             iconSize / self.killIcon:getHeight()
@@ -477,7 +475,7 @@ function ArenaOverlays:drawAttackPreview(
         love.graphics.draw(
             self.killIcon,
             healthX + panelWidth / 2,
-            panelY + 43,
+            detailCenterY,
             0,
             iconScale,
             iconScale,
@@ -485,7 +483,13 @@ function ArenaOverlays:drawAttackPreview(
             self.killIcon:getHeight() / 2
         )
     else
-        drawPreviewHPGauge(preview, healthX + 12, panelY + 36, panelWidth - 24, 16)
+        drawPreviewHPGauge(
+            preview,
+            healthX + 14,
+            math.floor(detailCenterY - 8 + 0.5),
+            panelWidth - 28,
+            16
+        )
     end
 
     love.graphics.setColor(1, 1, 1, 1)

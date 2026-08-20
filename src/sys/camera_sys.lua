@@ -12,9 +12,11 @@ function CameraSystem.new(camera, mouse, keyboard, options)
     self.zoomStep = options.zoomStep or 0.2
     self.verticalDragThreshold = options.verticalDragThreshold or 140
     self.verticalSmoothing = options.verticalSmoothing or 12
+    self.horizontalSmoothing = options.horizontalSmoothing or 5
     self.fastPanMultiplier = options.fastPanMultiplier or 3.5
     self.verticalLevel = 3
     self.verticalTargetY = nil
+    self.horizontalTargetX = nil
     self.verticalDrag = 0
     self.outputScale = 1
     self.outputOffsetX = 0
@@ -65,9 +67,11 @@ function CameraSystem:keypressed(key, isRepeat)
         self.camera:setY(self:_levelY(3))
         return
     elseif key == "q" then
+        self.horizontalTargetX = nil
         self.camera:setX(0)
         return
     elseif key == "e" then
+        self.horizontalTargetX = nil
         self.camera:setX(self.camera:getMaximumX())
         return
     end
@@ -81,13 +85,82 @@ function CameraSystem:setOutputTransform(scale, offsetX, offsetY)
     self.outputOffsetY = offsetY or 0
 end
 
+function CameraSystem:snapToWorldPosition(worldX, worldY)
+    self.horizontalTargetX = nil
+    self.verticalTargetY = nil
+    self.verticalDrag = 0
+    self.camera:setX(
+        worldX - self.camera.viewportWidth / (2 * self.camera.zoom)
+    )
+    self.camera:setY(
+        worldY - self.camera.viewportHeight / (2 * self.camera.zoom)
+    )
+    self.verticalLevel = self:_nearestVerticalLevel()
+end
+
+function CameraSystem:focusWorldPosition(worldX, worldY, smooth)
+    local targetX = math.max(0, math.min(
+        self.camera:getMaximumX(),
+        worldX - self.camera.viewportWidth / (2 * self.camera.zoom)
+    ))
+    local targetY = math.max(0, math.min(
+        self.camera:getMaximumY(),
+        worldY - self.camera.viewportHeight / (2 * self.camera.zoom)
+    ))
+    local maximumY = self.camera:getMaximumY()
+    self.verticalLevel = maximumY <= 0.001
+        and self.verticalLevel
+        or math.max(1, math.min(3,
+            math.floor(targetY / maximumY * 2 + 1.5)))
+    self.verticalDrag = 0
+
+    if smooth then
+        self.horizontalTargetX = targetX
+        self.verticalTargetY = self:_levelY(self.verticalLevel)
+    else
+        self.horizontalTargetX = nil
+        self.verticalTargetY = nil
+        self.camera:setX(targetX)
+        self.camera:setY(self:_levelY(self.verticalLevel))
+    end
+end
+
+function CameraSystem:updateFocus(dt)
+    if self.horizontalTargetX then
+        local blend = 1 - math.exp(-self.horizontalSmoothing * dt)
+        local nextX = self.camera.x
+            + (self.horizontalTargetX - self.camera.x) * blend
+        if math.abs(self.horizontalTargetX - nextX) < 0.05 then
+            nextX = self.horizontalTargetX
+            self.horizontalTargetX = nil
+        end
+        self.camera:setX(nextX)
+    end
+
+    if self.verticalTargetY then
+        self.verticalTargetY = self:_levelY(self.verticalLevel)
+        local blend = 1 - math.exp(-self.verticalSmoothing * dt)
+        local nextY = self.camera.y
+            + (self.verticalTargetY - self.camera.y) * blend
+
+        if math.abs(self.verticalTargetY - nextY) < 0.05 then
+            nextY = self.verticalTargetY
+            self.verticalTargetY = nil
+        end
+        self.camera:setY(nextY)
+    end
+end
+
 function CameraSystem:update(dt)
     local moveX = self.keyboard:getHorizontalMovement()
     local worldPanSpeed = self.panSpeed / self.camera.zoom
     if self.keyboard:isShiftDown() then
         worldPanSpeed = worldPanSpeed * self.fastPanMultiplier
     end
-    self.camera:move(moveX * worldPanSpeed * dt, 0)
+    if moveX ~= 0 then
+        self.horizontalTargetX = nil
+        self.camera:move(moveX * worldPanSpeed * dt, 0)
+    end
 
     local keyboardStep = self.keyboard:consumeVerticalStep()
     if keyboardStep ~= 0 then
@@ -96,7 +169,10 @@ function CameraSystem:update(dt)
 
     local dragX, dragY = self.mouse:consumeDrag()
     local dragScale = self.outputScale * self.camera.zoom
-    self.camera:move(-dragX / dragScale, 0)
+    if dragX ~= 0 then
+        self.horizontalTargetX = nil
+        self.camera:move(-dragX / dragScale, 0)
+    end
 
     self.verticalDrag = self.verticalDrag + dragY
     if math.abs(self.verticalDrag) >= self.verticalDragThreshold then
@@ -122,18 +198,7 @@ function CameraSystem:update(dt)
         self.verticalTargetY = self:_levelY(self.verticalLevel)
     end
 
-    if self.verticalTargetY then
-        self.verticalTargetY = self:_levelY(self.verticalLevel)
-        local blend = 1 - math.exp(-self.verticalSmoothing * dt)
-        local nextY = self.camera.y
-            + (self.verticalTargetY - self.camera.y) * blend
-
-        if math.abs(self.verticalTargetY - nextY) < 0.05 then
-            nextY = self.verticalTargetY
-            self.verticalTargetY = nil
-        end
-        self.camera:setY(nextY)
-    end
+    self:updateFocus(dt)
 end
 
 return CameraSystem

@@ -58,13 +58,12 @@ function UnitDraw:getFacingSign(unit, facing)
 end
 
 local function drawOrder(left, right)
-    local leftScale = left.definition.scale or 1
-    local rightScale = right.definition.scale or 1
+    local leftLayer = tonumber(left.definition.layer) or 1
+    local rightLayer = tonumber(right.definition.layer) or 1
 
-    -- LÖVE draws later items on top: larger units go first so smaller units
-    -- remain visible above them.
-    if leftScale ~= rightScale then
-        return leftScale > rightScale
+    -- LÖVE draws later items on top, so lower layer values are emitted last.
+    if leftLayer ~= rightLayer then
+        return leftLayer > rightLayer
     end
 
     if left.targH ~= right.targH then
@@ -72,6 +71,12 @@ local function drawOrder(left, right)
     end
     if left.targW ~= right.targW then
         return left.targW < right.targW
+    end
+    local leftOffset = left.arenaCellOffsetX or 0
+    local rightOffset = right.arenaCellOffsetX or 0
+    if leftOffset ~= rightOffset then
+        -- Later draws appear on top, so right-hand slots are emitted first.
+        return leftOffset > rightOffset
     end
     if left.unitId ~= right.unitId then
         return left.unitId < right.unitId
@@ -99,18 +104,21 @@ function UnitDraw:_visualAt(unit, targW, targH, lift, scaleMultiplier, cellOffse
     local image = self:_getImage(unit.unitId)
     local relativeScale = unit.definition.scale or 1
     local scale = self.arenaScale * relativeScale * (scaleMultiplier or 1)
-    local cellLeft = self.grid.x + (targW - 1) * self.grid.cellSize
+    local cellLeft = self.grid.x + (targW - 1) * self.grid.cellWidth
     local visualRow = self.grid.rows - targH
-    local cellTop = self.grid.y + visualRow * self.grid.cellSize
-    local spacing = math.min(32, self.grid.cellSize / math.max(unit.population, 1))
+    local cellTop = self.grid.y + visualRow * self.grid.cellHeight
+    local spacing = math.min(32,
+        self.grid.cellWidth / math.max(unit.population, 1))
     local populationOffset = cellOffsetX
     if populationOffset == nil then
         populationOffset = (unit.populationIndex - (unit.population + 1) / 2) * spacing
     end
 
     return image,
-        cellLeft + self.grid.cellSize / 2 + populationOffset,
-        cellTop + self.grid.cellSize - (lift or 0),
+        cellLeft + self.grid.cellWidth / 2 + populationOffset,
+        cellTop + self.grid.cellHeight
+            - (lift or 0)
+            - (unit.arenaLayerOffsetY or 0),
         scale
 end
 
@@ -191,9 +199,14 @@ function UnitDraw:getUnitAt(worldX, worldY, units, predicate)
     return nil
 end
 
-function UnitDraw:drawUnit(unit, overlays, enemyArenaSystem)
+function UnitDraw:drawUnit(unit, overlays, enemyArenaSystem, isSelected)
     local hasStatus = overlays and enemyArenaSystem
-        and overlays:beginUnitStatus(unit, enemyArenaSystem)
+        and overlays:beginUnitStatus(
+            unit,
+            enemyArenaSystem,
+            false,
+            isSelected
+        )
     self:_drawUnit(unit)
     if hasStatus then
         overlays:endUnitStatus()
@@ -203,12 +216,6 @@ end
 function UnitDraw:draw(units, hoveredUnit, overlays, excludedUnit, options)
     options = options or {}
     local orderedUnits = self:_orderedUnits(units)
-    local engagedFocusLookup = {}
-    for _, unit in ipairs(options.engagedFocusTargets or {}) do
-        engagedFocusLookup[unit] = true
-    end
-    local hasEngagedFocus = next(engagedFocusLookup) ~= nil
-
     for _, unit in ipairs(orderedUnits) do
         if unit ~= hoveredUnit and unit ~= excludedUnit then
             local sharesHoveredCell = hoveredUnit
@@ -216,23 +223,14 @@ function UnitDraw:draw(units, hoveredUnit, overlays, excludedUnit, options)
                 and unit.targH == hoveredUnit.targH
             local isEnemy = options.enemyArenaSystem
                 and options.enemyArenaSystem:isEnemy(unit)
-            local shouldDimForEngagement = hasEngagedFocus
-                and isEnemy
-                and not engagedFocusLookup[unit]
-            local shouldDimForCapacity = options.dimUnavailableEngagements
-                and isEnemy
-                and not engagedFocusLookup[unit]
-                and options.enemyArenaSystem:isAtEngagementCapacity(unit)
-            local shouldDim = shouldDimForEngagement
-                or shouldDimForCapacity
-                or (sharesHoveredCell
-                    and (not options.dimEnemiesOnly
-                        or isEnemy))
+            local shouldDim = sharesHoveredCell
+                and (not options.dimEnemiesOnly or isEnemy)
             local hasStatus = overlays and options.enemyArenaSystem
                 and overlays:beginUnitStatus(
                     unit,
                     options.enemyArenaSystem,
-                    shouldDim
+                    shouldDim,
+                    false
                 )
 
             if shouldDim and overlays and not hasStatus then
@@ -248,7 +246,7 @@ function UnitDraw:draw(units, hoveredUnit, overlays, excludedUnit, options)
     end
 
     if hoveredUnit and hoveredUnit ~= excludedUnit and not options.deferFocusedUnit then
-        self:drawUnit(hoveredUnit, overlays, options.enemyArenaSystem)
+        self:drawUnit(hoveredUnit, overlays, options.enemyArenaSystem, false)
     end
 end
 

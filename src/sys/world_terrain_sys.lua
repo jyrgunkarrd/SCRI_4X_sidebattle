@@ -4,7 +4,7 @@ local WorldTerrainSystem = {}
 WorldTerrainSystem.__index = WorldTerrainSystem
 
 local function hexKey(q, r)
-    return q .. ":" .. r
+    return ("%d:%d"):format(q, r)
 end
 
 function WorldTerrainSystem.new(map)

@@ -11,7 +11,20 @@ return
         },
         targ_h = 1,
         targ_w = 1,
-        pop = 4,
+        pop = 2,
+
+    },
+
+    {
+
+        unitid = {
+
+        "blakber",
+
+        },
+        targ_h = 1,
+        targ_w = 2,
+        pop = 2,
 
     },
 
@@ -23,7 +36,7 @@ return
 
         },
         targ_h = 1,
-        targ_w = 1,
+        targ_w = 3,
         pop = 2,
 
     },
@@ -36,7 +49,7 @@ return
 
         },
         targ_h = 1,
-        targ_w = 1,
+        targ_w = 4,
         pop = 2,
 
     },
@@ -89,7 +102,20 @@ return
         },
         targ_h = 1,
         targ_w = 5,
-        pop = 4,
+        pop = 2,
+
+    },
+
+    {
+
+        unitid = {
+
+        "en_forg",
+
+        },
+        targ_h = 1,
+        targ_w = 7,
+        pop = 2,
 
     },
     

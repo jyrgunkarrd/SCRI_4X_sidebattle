@@ -1,6 +1,7 @@
 local ShoutText = {}
 ShoutText.__index = ShoutText
 local utf8 = require("utf8")
+local FactionSystem = require("src.sys.faction_sys")
 
 local FONT_PATH = "assets/fonts/Furore.otf"
 
@@ -117,8 +118,7 @@ function ShoutText:draw(unitDraw, camera, arenaHeight)
         math.floor(self.elapsed * self.charactersPerSecond)
     )
     local displayedText = visibleText(self.text, revealedCharacters)
-    local isEnemy = self.unit.isEnemy == true
-        or self.unit.definition.enemy == true
+    local isEnemy = FactionSystem.isEnemy(self.unit)
 
     love.graphics.setShader()
     love.graphics.setColor(0.015, 0.02, 0.035, 0.88 * alpha)
@@ -130,6 +130,51 @@ function ShoutText:draw(unitDraw, camera, arenaHeight)
     end
     love.graphics.rectangle("fill", x, y, 4, boxHeight, 2, 2)
 
+    love.graphics.setFont(self.font)
+    love.graphics.setColor(1, 1, 1, alpha)
+    love.graphics.printf(
+        displayedText,
+        x + self.paddingX,
+        y + self.paddingY,
+        wrapWidth,
+        "center"
+    )
+    love.graphics.setColor(1, 1, 1, 1)
+end
+
+function ShoutText:drawWorld(cameraX, cameraY, viewportWidth, viewportHeight)
+    if not self.unit or not self.text then
+        return
+    end
+
+    local centerX = self.unit.centerX - cameraX + viewportWidth / 2
+    local unitBottom = self.unit.centerY - cameraY + viewportHeight / 2 + 54
+    local textWidth = math.min(self.font:getWidth(self.text), self.maximumWidth)
+    local wrapWidth = math.max(1, textWidth)
+    local _, wrappedLines = self.font:getWrap(self.text, wrapWidth)
+    local boxWidth = wrapWidth + self.paddingX * 2
+    local boxHeight = #wrappedLines * self.font:getHeight() + self.paddingY * 2
+    local x = math.floor(math.max(8, math.min(
+        centerX - boxWidth / 2,
+        viewportWidth - boxWidth - 8
+    )) + 0.5)
+    local y = math.floor(math.max(8, math.min(
+        unitBottom + 8,
+        viewportHeight - boxHeight - 8
+    )) + 0.5)
+    local alpha = math.min(1, self.timeRemaining / self.fadeDuration)
+        * math.min(1, self.elapsed / self.appearDuration)
+    local revealedCharacters = math.min(
+        self.characterCount,
+        math.floor(self.elapsed * self.charactersPerSecond)
+    )
+    local displayedText = visibleText(self.text, revealedCharacters)
+
+    love.graphics.setShader()
+    love.graphics.setColor(0.015, 0.02, 0.035, 0.88 * alpha)
+    love.graphics.rectangle("fill", x, y, boxWidth, boxHeight, 5, 5)
+    love.graphics.setColor(0.62, 0.78, 0.94, 0.9 * alpha)
+    love.graphics.rectangle("fill", x, y, 4, boxHeight, 2, 2)
     love.graphics.setFont(self.font)
     love.graphics.setColor(1, 1, 1, alpha)
     love.graphics.printf(

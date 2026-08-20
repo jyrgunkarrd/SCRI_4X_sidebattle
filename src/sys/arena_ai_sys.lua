@@ -44,6 +44,8 @@ function ArenaAISystem.new(
     self.queue = {}
     self.queueIndex = 0
     self.currentUnit = nil
+    self.pendingPlan = nil
+    self.focusEventPending = false
     self.movement = nil
     self.waitingForAttack = false
     self.delayRemaining = 0
@@ -62,6 +64,8 @@ function ArenaAISystem:_beginPhase()
     table.sort(self.queue, unitOrder)
     self.queueIndex = 0
     self.currentUnit = nil
+    self.pendingPlan = nil
+    self.focusEventPending = false
     self.movement = nil
     self.waitingForAttack = false
     self.delayRemaining = self.initialDelay
@@ -76,6 +80,8 @@ function ArenaAISystem:_endPhase()
     self.queue = {}
     self.queueIndex = 0
     self.currentUnit = nil
+    self.pendingPlan = nil
+    self.focusEventPending = false
     self.movement = nil
     self.waitingForAttack = false
     self.delayRemaining = 0
@@ -110,8 +116,10 @@ function ArenaAISystem:_finishCurrentUnit()
         self.currentUnit.exhausted = true
     end
     self.currentUnit = nil
+    self.pendingPlan = nil
     self.waitingForAttack = false
     self.delayRemaining = self.actionDelay
+    self:_prepareNextPlan()
 end
 
 function ArenaAISystem:notifyAttackComplete()
@@ -145,12 +153,11 @@ function ArenaAISystem:_chooseMeleeTarget(unit, candidates, movementCost)
 end
 
 function ArenaAISystem:_existingMeleePlan(unit)
-    local candidates = {}
-    for _, player in ipairs(self.enemyArenaSystem:getEngagedOpponents(unit)) do
-        if self.unitSystem:contains(player) and (player.hp or 0) > 0 then
-            candidates[#candidates + 1] = player
-        end
-    end
+    local candidates = self.enemyArenaSystem:getPlayersAt(
+        self.unitSystem:getUnits(),
+        unit.targW,
+        unit.targH
+    )
     local target = self:_chooseMeleeTarget(unit, candidates, 0)
     if not target then
         return nil
@@ -160,7 +167,6 @@ function ArenaAISystem:_existingMeleePlan(unit)
         target = target,
         movementCost = 0,
         toW = unit.targW,
-        engage = false,
     }
 end
 
@@ -190,8 +196,11 @@ function ArenaAISystem:_furthestOpenForwardPosition(unit)
         ) then
             break
         end
-        furthestW = targW
-        furthestCost = distance
+        if self.enemyArenaSystem:canEnterCell(
+            units, unit, targW, unit.targH) then
+            furthestW = targW
+            furthestCost = distance
+        end
     end
     return furthestW, furthestCost
 end
@@ -213,12 +222,14 @@ function ArenaAISystem:_meleePlan(unit)
 
     for distance = 0, maximumDistance do
         local targW = unit.targW - distance
-        local candidates = self.enemyArenaSystem:getEngageablePlayersAt(
+        local candidates = self.enemyArenaSystem:getPlayersAt(
             units,
             targW,
             unit.targH
         )
-        if #candidates > 0 then
+        local canEnter = distance == 0 or self.enemyArenaSystem:canEnterCell(
+            units, unit, targW, unit.targH)
+        if canEnter and #candidates > 0 then
             local target = self:_chooseMeleeTarget(unit, candidates, distance)
             if target then
                 local preview = self.combatSystem:getMeleeAttackPreview(
@@ -238,7 +249,6 @@ function ArenaAISystem:_meleePlan(unit)
                         target = target,
                         movementCost = distance,
                         toW = targW,
-                        engage = true,
                     }
                     bestRatio = ratio
                 end
@@ -293,10 +303,13 @@ function ArenaAISystem:_rangedPositions(unit)
         ) then
             break
         end
-        positions[#positions + 1] = {
-            targW = targW,
-            movementCost = distance,
-        }
+        if self.enemyArenaSystem:canEnterCell(
+            units, unit, targW, unit.targH) then
+            positions[#positions + 1] = {
+                targW = targW,
+                movementCost = distance,
+            }
+        end
     end
     return positions
 end
@@ -330,8 +343,7 @@ function ArenaAISystem:_bestRangedPositionForTarget(unit, target, positions)
 end
 
 function ArenaAISystem:_rangedPlan(unit)
-    if not self.combatSystem:getRangedAttack(unit)
-        or self.combatSystem:isUnitEngaged(unit) then
+    if not self.combatSystem:getRangedAttack(unit) then
         return nil
     end
 
@@ -365,17 +377,6 @@ function ArenaAISystem:_choosePlan(unit)
     local hasMelee = self.combatSystem:getMeleeAttack(unit) ~= nil
     local units = self.unitSystem:getUnits()
 
-    if self.combatSystem:isUnitEngaged(unit) then
-        if hasMelee then
-            return self:_meleePlan(unit)
-        end
-        return {
-            kind = "move",
-            movementCost = 0,
-            toW = unit.targW,
-        }
-    end
-
     if self.enemyArenaSystem:cellHasBlockingPlayer(
         units,
         unit.targW,
@@ -385,20 +386,11 @@ function ArenaAISystem:_choosePlan(unit)
             return self:_meleePlan(unit)
         end
 
-        local targets = self.enemyArenaSystem:getEngageablePlayersAt(
-            units,
-            unit.targW,
-            unit.targH
-        )
-        table.sort(targets, unitOrder)
-        if targets[1] then
-            return {
-                kind = "engage",
-                target = targets[1],
-                movementCost = 0,
-                toW = unit.targW,
-            }
-        end
+        return {
+            kind = "move",
+            movementCost = 0,
+            toW = unit.targW,
+        }
     end
 
     if hasRanged then
@@ -419,6 +411,18 @@ function ArenaAISystem:_choosePlan(unit)
     }
 end
 
+function ArenaAISystem:_prepareNextPlan()
+    local unit = self.currentUnit or self:_nextUnit()
+    if not unit then
+        return nil
+    end
+    if not self.pendingPlan then
+        self.pendingPlan = self:_choosePlan(unit)
+        self.focusEventPending = true
+    end
+    return unit, self.pendingPlan
+end
+
 function ArenaAISystem:_executePlan(plan)
     local unit = self.currentUnit
     if not unit or not self.unitSystem:contains(unit) then
@@ -426,16 +430,7 @@ function ArenaAISystem:_executePlan(plan)
         return nil
     end
 
-    if plan.kind == "engage" then
-        self.enemyArenaSystem:engageEnemyWithPlayer(unit, plan.target)
-    elseif plan.kind == "melee" then
-        if plan.engage and not self.enemyArenaSystem:engageEnemyWithPlayer(
-            unit,
-            plan.target
-        ) then
-            self:_finishCurrentUnit()
-            return nil
-        end
+    if plan.kind == "melee" then
         local result = self.combatSystem:performMeleeAttack(unit, plan.target)
         if result then
             self.waitingForAttack = true
@@ -458,6 +453,16 @@ function ArenaAISystem:_startPlan(unit, plan)
     if movementCost <= 0 or plan.toW == unit.targW then
         return self:_executePlan(plan)
     end
+    local destinationSlot = self.enemyArenaSystem:getAvailableSlot(
+        self.unitSystem:getUnits(),
+        unit,
+        plan.toW,
+        unit.targH
+    )
+    if not destinationSlot then
+        self:_finishCurrentUnit()
+        return nil
+    end
     if not self.unitSystem:spendMovementPoints(unit, movementCost) then
         self:_finishCurrentUnit()
         return nil
@@ -471,10 +476,11 @@ function ArenaAISystem:_startPlan(unit, plan)
         unit = unit,
         fromW = fromW,
         toW = plan.toW,
+        toSlot = destinationSlot,
         elapsed = 0,
         plan = plan,
     }
-    return { type = "movement", unit = unit }
+    return { type = "movement", unit = unit, target = plan.target }
 end
 
 function ArenaAISystem:_updateMovement(dt)
@@ -489,6 +495,12 @@ function ArenaAISystem:_updateMovement(dt)
         return nil
     end
 
+    self.enemyArenaSystem:commitUnitSlot(
+        movement.unit,
+        movement.toW,
+        movement.unit.targH,
+        movement.toSlot
+    )
     movement.unit.visualTargW = nil
     self.movement = nil
     self.enemyArenaSystem:update(self.unitSystem:getUnits())
@@ -504,6 +516,17 @@ function ArenaAISystem:update(dt, isEnemyPhase)
     end
     if not self.phaseActive then
         self:_beginPhase()
+        self:_prepareNextPlan()
+    end
+    if self.focusEventPending then
+        self.focusEventPending = false
+        return {
+            type = "action_focus",
+            unit = self.currentUnit,
+            target = self.pendingPlan and self.pendingPlan.target or nil,
+            destinationW = self.pendingPlan and self.pendingPlan.toW or nil,
+            destinationH = self.currentUnit and self.currentUnit.targH or nil,
+        }
     end
     if self.waitingForAttack then
         return nil
@@ -525,7 +548,8 @@ function ArenaAISystem:update(dt, isEnemyPhase)
         return nil
     end
 
-    local plan = self:_choosePlan(unit)
+    local plan = self.pendingPlan or self:_choosePlan(unit)
+    self.pendingPlan = nil
     return self:_startPlan(unit, plan)
 end
 

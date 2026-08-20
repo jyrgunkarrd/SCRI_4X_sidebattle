@@ -7,7 +7,7 @@ return
     {
 
         id = "flat_map001",
-        name = "Rural Plains",
+        name = "Jungle Floor",
 
     },
 
@@ -24,6 +24,20 @@ return
 
         id = "rvr",
         name = "River",
+
+    },
+
+    {
+
+        id = "mtn",
+        name = "Mountain",
+
+    },
+
+    {
+
+        id = "mnd",
+        name = "Abandoned Mound",
 
     },
 

@@ -15,6 +15,7 @@ function TurnSystem.new(unitSystem, options)
     self.endDuration = options.endDuration or 0.6
     self.announcementDuration = options.announcementDuration or 1.2
     self.announcementFadeDuration = options.announcementFadeDuration or 0.15
+    self.onPhaseEntered = options.onPhaseEntered
     self.turnCount = 0
     self.phase = nil
     self.phaseElapsed = 0
@@ -56,10 +57,21 @@ function TurnSystem:_enterPhase(phase)
             phase
         )
     elseif phase == TurnSystem.PHASE_ENEMY then
+        if self.unitSystem.readyPlayerUnits then
+            self.unitSystem:readyPlayerUnits()
+        end
         self:_setAnnouncement(
             ("TURN %d\nENEMY TURN"):format(self.turnCount),
             phase
         )
+    elseif phase == TurnSystem.PHASE_END then
+        if self.unitSystem.clearAllOccupied then
+            self.unitSystem:clearAllOccupied()
+        end
+    end
+
+    if self.onPhaseEntered then
+        self.onPhaseEntered(phase, self.turnCount)
     end
 end
 

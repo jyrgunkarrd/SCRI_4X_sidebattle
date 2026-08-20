@@ -165,7 +165,7 @@ function ArenaEnvironmentBackground:draw(camera)
 end
 
 function ArenaEnvironmentBackground:drawFloor(grid)
-    local floorHeight = grid.cellSize / 20
+    local floorHeight = grid.cellHeight / 20 + 8
     local backingOverhang = 8
     local arenaBottom = grid.y + grid.height
     local fillTop = arenaBottom - floorHeight

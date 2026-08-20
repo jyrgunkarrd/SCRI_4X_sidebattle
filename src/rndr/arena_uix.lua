@@ -14,38 +14,6 @@ local function smoothstep(value)
     return value * value * (3 - 2 * value)
 end
 
-local function drawSizePips(unit, enemyArenaSystem, centerX, y, pipSize, gap)
-    local size = enemyArenaSystem:getSize(unit)
-    local isEnemy = enemyArenaSystem:isEnemy(unit)
-    local occupied = isEnemy and enemyArenaSystem:isOccupied(unit)
-    local filled = isEnemy
-        and math.min(size, enemyArenaSystem:getEngagedSize(unit))
-        or size
-    local totalWidth = size * pipSize + (size - 1) * gap
-    local startX = centerX - totalWidth / 2
-
-    for index = 1, size do
-        local x = math.floor(startX + (index - 1) * (pipSize + gap) + 0.5)
-        local drawY = math.floor(y + 0.5)
-        love.graphics.setColor(0, 0, 0, 1)
-        love.graphics.rectangle("fill", x, drawY, pipSize, pipSize)
-
-        love.graphics.setColor(0.025, 0.035, 0.055, 0.95)
-        love.graphics.rectangle("fill", x + 2, drawY + 2, pipSize - 4, pipSize - 4)
-
-        if index <= filled then
-            if occupied then
-                love.graphics.setColor(0.3, 0.86, 0.46, 1)
-            elseif isEnemy then
-                love.graphics.setColor(0.96, 0.56, 0.2, 1)
-            else
-                love.graphics.setColor(0.3, 0.7, 1, 1)
-            end
-            love.graphics.rectangle("fill", x + 2, drawY + 2, pipSize - 4, pipSize - 4)
-        end
-    end
-end
-
 local function drawMovementGauge(unit, movementSystem, x, y, width)
     local unitSystem = movementSystem.unitSystem
     local maximum = unitSystem:getMaximumMovementPoints(unit)
@@ -373,7 +341,7 @@ function ArenaUIX:drawTurnAnnouncement(turnSystem)
     love.graphics.setColor(1, 1, 1, 1)
 end
 
-function ArenaUIX:draw(unitDraw, enemyArenaSystem, movementSystem)
+function ArenaUIX:draw(unitDraw, movementSystem)
     if self.progress <= 0 then
         return
     end
@@ -423,15 +391,6 @@ function ArenaUIX:draw(unitDraw, enemyArenaSystem, movementSystem)
             scale,
             image:getWidth() / 2,
             image:getHeight()
-        )
-
-        drawSizePips(
-            self.displayedUnit,
-            enemyArenaSystem,
-            portraitX + portraitSize / 2,
-            portraitY + portraitSize + 14,
-            16,
-            5
         )
 
         drawMovementGauge(

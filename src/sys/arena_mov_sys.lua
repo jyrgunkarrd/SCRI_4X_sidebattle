@@ -1,5 +1,6 @@
 local ArenaMovementSystem = {}
 ArenaMovementSystem.__index = ArenaMovementSystem
+local FactionSystem = require("src.sys.faction_sys")
 
 local function cellKey(targW, targH)
     return targW .. ":" .. targH
@@ -14,7 +15,7 @@ function ArenaMovementSystem.new(arenaGrid, enemyArenaSystem, unitSystem)
     self.destinations = {}
     self.destinationLookup = {}
     self.hoveredDestination = nil
-    self.hoveredEngagement = nil
+    self.hoveredMeleeTarget = nil
     self.moveDuration = 0.22
     self.movement = nil
     return self
@@ -29,11 +30,10 @@ function ArenaMovementSystem:setSelectedUnit(unit)
     self.destinations = {}
     self.destinationLookup = {}
     self.hoveredDestination = nil
-    self.hoveredEngagement = nil
+    self.hoveredMeleeTarget = nil
 
-    if not unit or self.enemyArenaSystem:isEngaged(unit)
-        or unit.exhausted or self.movement
-        or unit.isEnemy == true or unit.definition.enemy == true then
+    if not unit or unit.exhausted or self.movement
+        or FactionSystem.isEnemy(unit) then
         return
     end
 
@@ -50,17 +50,19 @@ function ArenaMovementSystem:setSelectedUnit(unit)
         unit.targH
     )
 
-    if blockedInCurrentCell then
+    if #currentEnemies > 0 then
         local destination = {
             targW = unit.targW,
             targH = unit.targH,
             movementCost = 0,
             enemies = currentEnemies,
-            requiresEngagement = true,
+            requiresMeleeTarget = true,
         }
-        self.destinations[1] = destination
+        self.destinations[#self.destinations + 1] = destination
         self.destinationLookup[cellKey(unit.targW, unit.targH)] = destination
-        return
+        if blockedInCurrentCell then
+            return
+        end
     end
 
     for _, direction in ipairs({ -1, 1 }) do
@@ -80,15 +82,24 @@ function ArenaMovementSystem:setSelectedUnit(unit)
                 targW,
                 unit.targH
             )
-            local destination = {
-                targW = targW,
-                targH = unit.targH,
-                movementCost = distance,
-                enemies = enemies,
-                requiresEngagement = isBlocked,
-            }
-            self.destinations[#self.destinations + 1] = destination
-            self.destinationLookup[cellKey(targW, unit.targH)] = destination
+            local availableSlot = self.enemyArenaSystem:getAvailableSlot(
+                units,
+                unit,
+                targW,
+                unit.targH
+            )
+            if availableSlot then
+                local destination = {
+                    targW = targW,
+                    targH = unit.targH,
+                    movementCost = distance,
+                    enemies = enemies,
+                    requiresMeleeTarget = isBlocked,
+                    arenaSlot = availableSlot,
+                }
+                self.destinations[#self.destinations + 1] = destination
+                self.destinationLookup[cellKey(targW, unit.targH)] = destination
+            end
 
             if isBlocked then
                 break
@@ -101,12 +112,32 @@ function ArenaMovementSystem:getDestinations()
     return self.destinations
 end
 
+function ArenaMovementSystem:getFurthestOpenDestination(direction)
+    if not self.selectedUnit or (direction ~= -1 and direction ~= 1) then
+        return nil
+    end
+
+    local originW = self.selectedUnit.targW
+    local furthest
+    for _, destination in ipairs(self.destinations) do
+        local delta = destination.targW - originW
+        local isInDirection = direction < 0 and delta < 0
+            or direction > 0 and delta > 0
+        if isInDirection and not destination.requiresMeleeTarget
+            and (not furthest
+                or math.abs(delta) > math.abs(furthest.targW - originW)) then
+            furthest = destination
+        end
+    end
+    return furthest
+end
+
 function ArenaMovementSystem:getHoveredDestination()
     return self.hoveredDestination
 end
 
-function ArenaMovementSystem:getHoveredEngagement()
-    return self.hoveredEngagement
+function ArenaMovementSystem:getHoveredMeleeTarget()
+    return self.hoveredMeleeTarget
 end
 
 function ArenaMovementSystem:worldToCell(worldX, worldY)
@@ -118,8 +149,8 @@ function ArenaMovementSystem:worldToCell(worldX, worldY)
         return nil, nil
     end
 
-    local targW = math.floor(localX / self.grid.cellSize) + 1
-    local visualRow = math.floor(localY / self.grid.cellSize)
+    local targW = math.floor(localX / self.grid.cellWidth) + 1
+    local visualRow = math.floor(localY / self.grid.cellHeight)
     local targH = self.grid.rows - visualRow
     return targW, targH
 end
@@ -138,14 +169,14 @@ function ArenaMovementSystem:updateHover(worldX, worldY, hoveredEnemy)
     local destination = targW
         and self.destinationLookup[cellKey(targW, targH)]
         or nil
-    local validEnemy = destination
+    local validMeleeTarget = destination
         and hoveredEnemy
         and containsUnit(destination.enemies, hoveredEnemy)
-        and self.enemyArenaSystem:canEngage(hoveredEnemy)
+        and (hoveredEnemy.hp or 0) > 0
 
-    self.hoveredEngagement = validEnemy and hoveredEnemy or nil
+    self.hoveredMeleeTarget = validMeleeTarget and hoveredEnemy or nil
     self.hoveredDestination = destination
-        and (not destination.requiresEngagement or validEnemy)
+        and (not destination.requiresMeleeTarget or validMeleeTarget)
         and destination
         or nil
     return self.hoveredDestination
@@ -153,15 +184,13 @@ end
 
 function ArenaMovementSystem:clearHover()
     self.hoveredDestination = nil
-    self.hoveredEngagement = nil
+    self.hoveredMeleeTarget = nil
 end
 
 function ArenaMovementSystem:moveSelectedToWorld(worldX, worldY, targetedEnemy)
     if not self.selectedUnit
-        or self.enemyArenaSystem:isEngaged(self.selectedUnit)
         or self.selectedUnit.exhausted or self.movement
-        or self.selectedUnit.isEnemy == true
-        or self.selectedUnit.definition.enemy == true then
+        or FactionSystem.isEnemy(self.selectedUnit) then
         return false
     end
 
@@ -174,11 +203,11 @@ function ArenaMovementSystem:moveSelectedToWorld(worldX, worldY, targetedEnemy)
         return false
     end
 
-    local validEngagement = targetedEnemy
+    local validMeleeTarget = targetedEnemy
         and containsUnit(destination.enemies, targetedEnemy)
-        and self.enemyArenaSystem:canEngage(targetedEnemy)
+        and (targetedEnemy.hp or 0) > 0
 
-    if destination.requiresEngagement and not validEngagement then
+    if destination.requiresMeleeTarget and not validMeleeTarget then
         return false
     end
 
@@ -191,28 +220,20 @@ function ArenaMovementSystem:moveSelectedToWorld(worldX, worldY, targetedEnemy)
 
     if destination.movementCost == 0 then
         local selectedOffset = self.selectedUnit.arenaCellOffsetX or 0
-        local enemyOffset = targetedEnemy.arenaCellOffsetX or self.grid.cellSize / 4
+        local enemyOffset = targetedEnemy.arenaCellOffsetX or 0
         self.selectedUnit.facing = enemyOffset < selectedOffset
             and "left"
             or "right"
-        local engaged = self.enemyArenaSystem:engage(
-            self.selectedUnit,
-            targetedEnemy
-        )
-        if not engaged then
-            return false
-        end
-
         local completed = {
             unit = self.selectedUnit,
-            engagementTarget = targetedEnemy,
+            meleeTarget = targetedEnemy,
             movementCost = 0,
             completed = true,
         }
         self.destinations = {}
         self.destinationLookup = {}
         self.hoveredDestination = nil
-        self.hoveredEngagement = nil
+        self.hoveredMeleeTarget = nil
         self:setSelectedUnit(self.selectedUnit)
         return completed
     end
@@ -228,13 +249,14 @@ function ArenaMovementSystem:moveSelectedToWorld(worldX, worldY, targetedEnemy)
         unit = self.selectedUnit,
         fromW = previousColumn,
         toW = destination.targW,
-        engagementTarget = validEngagement and targetedEnemy or nil,
+        toSlot = destination.arenaSlot,
+        meleeTarget = validMeleeTarget and targetedEnemy or nil,
         elapsed = 0,
     }
     self.destinations = {}
     self.destinationLookup = {}
     self.hoveredDestination = nil
-    self.hoveredEngagement = nil
+    self.hoveredMeleeTarget = nil
     return {
         unit = self.selectedUnit,
         movementCost = destination.movementCost,
@@ -255,23 +277,20 @@ function ArenaMovementSystem:update(dt)
         + (movement.toW - movement.fromW) * easedProgress
 
     if progress >= 1 then
+        self.enemyArenaSystem:commitUnitSlot(
+            movement.unit,
+            movement.toW,
+            movement.unit.targH,
+            movement.toSlot
+        )
         movement.unit.visualTargW = nil
         self.movement = nil
-        local engagementTarget
-        if movement.engagementTarget then
-            local engaged = self.enemyArenaSystem:engage(
-                movement.unit,
-                movement.engagementTarget
-            )
-            engagementTarget = engaged and movement.engagementTarget or nil
-        end
-
         if self.selectedUnit then
             self:setSelectedUnit(self.selectedUnit)
         end
         return {
             unit = movement.unit,
-            engagementTarget = engagementTarget,
+            meleeTarget = movement.meleeTarget,
         }
     end
 end

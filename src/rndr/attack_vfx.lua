@@ -23,6 +23,9 @@ function AttackVFX.new(unitDraw, options)
     self.backingPadding = options.backingPadding or 8
     self.shakeDuration = options.shakeDuration or 0.13
     self.shakeMagnitude = options.shakeMagnitude or 8
+    self.flankingShakeDuration = options.flankingShakeDuration or 0.18
+    self.flankingShakeMagnitude = options.flankingShakeMagnitude or 18
+    self.flankingFlashDuration = options.flankingFlashDuration or 0.10
     self.defeatFlashDuration = options.defeatFlashDuration or 0.11
     self.defeatWipeDuration = options.defeatWipeDuration or 0.30
     self.defeatSlideDistance = options.defeatSlideDistance or 34
@@ -91,6 +94,10 @@ function AttackVFX:play(result, onComplete, onImpact, onDefeat)
         elapsed = 0,
         impactTriggered = false,
         shakeRemaining = 0,
+        activeShakeDuration = self.shakeDuration,
+        flankingFlashRemaining = 0,
+        isFlanking = result.ignoresArmor == true
+            and result.attackType ~= "ranged",
         defeatActive = false,
         defeatElapsed = 0,
         onComplete = onComplete,
@@ -108,6 +115,7 @@ function AttackVFX:_clearTargetOffset(animation)
     if target then
         target.attackVfxOffsetX = nil
         target.attackVfxOffsetY = nil
+        target.attackVfxFlashAmount = nil
         target.defeatFlashAmount = nil
         target.defeatWipeAmount = nil
         target.defeatSlideX = nil
@@ -166,7 +174,13 @@ function AttackVFX:update(dt)
             or (not animation.result.strikes
                 and animation.result.hits[animation.hitIndex])
         if damage and damage > 0 then
-            animation.shakeRemaining = self.shakeDuration
+            animation.activeShakeDuration = animation.isFlanking
+                and self.flankingShakeDuration
+                or self.shakeDuration
+            animation.shakeRemaining = animation.activeShakeDuration
+            if animation.isFlanking then
+                animation.flankingFlashRemaining = self.flankingFlashDuration
+            end
             self:_spawnDamageNumber(animation.result.target, damage)
             if animation.onImpact then
                 animation.onImpact(animation.result, animation.hitIndex)
@@ -177,14 +191,34 @@ function AttackVFX:update(dt)
     local target = animation.result.target
     if animation.shakeRemaining > 0 and target then
         animation.shakeRemaining = math.max(0, animation.shakeRemaining - dt)
-        local strength = animation.shakeRemaining / self.shakeDuration
-        target.attackVfxOffsetX = math.sin(self.animationTime * 96)
-            * self.shakeMagnitude * strength
-        target.attackVfxOffsetY = math.cos(self.animationTime * 113)
-            * self.shakeMagnitude * 0.45 * strength
+        local strength = animation.shakeRemaining
+            / animation.activeShakeDuration
+        local magnitude = animation.isFlanking
+            and self.flankingShakeMagnitude
+            or self.shakeMagnitude
+        local verticalMultiplier = animation.isFlanking and 0.75 or 0.45
+        local horizontalFrequency = animation.isFlanking and 154 or 96
+        local verticalFrequency = animation.isFlanking and 181 or 113
+        target.attackVfxOffsetX = math.sin(
+            self.animationTime * horizontalFrequency
+        ) * magnitude * strength
+        target.attackVfxOffsetY = math.cos(
+            self.animationTime * verticalFrequency
+        ) * magnitude * verticalMultiplier * strength
     elseif target then
         target.attackVfxOffsetX = nil
         target.attackVfxOffsetY = nil
+    end
+
+    if animation.flankingFlashRemaining > 0 and target then
+        animation.flankingFlashRemaining = math.max(
+            0,
+            animation.flankingFlashRemaining - dt
+        )
+        target.attackVfxFlashAmount = animation.flankingFlashRemaining
+            / self.flankingFlashDuration
+    elseif target then
+        target.attackVfxFlashAmount = nil
     end
 
     local strikeDuration = self.approachDuration
@@ -209,6 +243,7 @@ function AttackVFX:update(dt)
         animation.elapsed = animation.elapsed - strikeDuration
         animation.impactTriggered = false
         animation.shakeRemaining = 0
+        animation.flankingFlashRemaining = 0
     end
 end
 

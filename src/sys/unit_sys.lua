@@ -1,5 +1,6 @@
 local UnitSystem = {}
 UnitSystem.__index = UnitSystem
+local FactionSystem = require("src.sys.faction_sys")
 
 local function movementPointMaximum(definition)
     return math.max(0, math.floor(tonumber(
@@ -16,14 +17,10 @@ function UnitSystem.new(unitDefinitions, arenaGrid)
     return self
 end
 
-function UnitSystem:inject(unitId, population, targW, targH)
+function UnitSystem:inject(unitId, population, targW, targH, options)
+    options = options or {}
     local definition = self.definitions.get(unitId)
     assert(definition, ("Unknown unit id '%s'"):format(tostring(unitId)))
-    assert(type(definition.size) == "number"
-        and definition.size >= 1
-        and definition.size % 1 == 0,
-        ("Unit '%s' must have a positive integer size"):format(unitId))
-
     population = population or 1
     assert(type(population) == "number" and population >= 1 and population % 1 == 0,
         "Unit population must be a positive integer")
@@ -34,11 +31,20 @@ function UnitSystem:inject(unitId, population, targW, targH)
         and targH >= 1 and targH <= self.grid.rows,
         ("targ_h must be between 1 and %d"):format(self.grid.rows))
 
+    local injectedUnits = {}
     for populationIndex = 1, population do
-        local isEnemy = definition.enemy == true
+        local faction = options.faction or definition.start_faction or "neutral"
+        local isEnemy = FactionSystem.isEnemy({
+            definition = definition,
+            faction = faction,
+        })
         local maximumMovementPoints = movementPointMaximum(definition)
         local maximumHP = math.max(1, math.floor(tonumber(definition.hp) or 1))
-        self.units[#self.units + 1] = {
+        local currentHP = tonumber(options.currentHP)
+            or (options.worldUnit and tonumber(options.worldUnit.hp))
+            or maximumHP
+        currentHP = math.max(1, math.min(maximumHP, currentHP))
+        local unit = {
             instanceId = self.nextInstanceId,
             definition = definition,
             unitId = unitId,
@@ -46,18 +52,22 @@ function UnitSystem:inject(unitId, population, targW, targH)
             population = population,
             targW = targW,
             targH = targH,
-            isEnemy = isEnemy,
+            faction = faction,
             facing = isEnemy and "left" or "right",
-            flanking = false,
+            occupied = false,
             maximumMovementPoints = maximumMovementPoints,
             movementPoints = maximumMovementPoints,
             maximumHP = maximumHP,
-            hp = maximumHP,
+            hp = currentHP,
             exhausted = false,
             retaliateAvailable = true,
+            worldUnit = options.worldUnit,
         }
+        self.units[#self.units + 1] = unit
+        injectedUnits[#injectedUnits + 1] = unit
         self.nextInstanceId = self.nextInstanceId + 1
     end
+    return injectedUnits
 end
 
 function UnitSystem:getUnits()
@@ -107,6 +117,14 @@ function UnitSystem:readyAllUnits()
     end
 end
 
+function UnitSystem:readyPlayerUnits()
+    for _, unit in ipairs(self.units) do
+        if not FactionSystem.isEnemy(unit) then
+            self:readyUnit(unit)
+        end
+    end
+end
+
 function UnitSystem:resetRetaliateAction(unit)
     unit.retaliateAvailable = true
 end
@@ -114,6 +132,12 @@ end
 function UnitSystem:resetAllRetaliateActions()
     for _, unit in ipairs(self.units) do
         self:resetRetaliateAction(unit)
+    end
+end
+
+function UnitSystem:clearAllOccupied()
+    for _, unit in ipairs(self.units) do
+        unit.occupied = false
     end
 end
 

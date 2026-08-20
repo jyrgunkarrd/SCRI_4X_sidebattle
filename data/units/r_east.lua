@@ -5,9 +5,21 @@ return
 
     {
 
+        -- General -- 
+
         id = "mam",
         name = "Mammoth",
+        start_faction = "player",
+        shout = {
+
+            { select = "As a river bends" },
+
+        },
+
+        -- Arena --
+
         scale = 1.2,
+        layer = 3,
         h_mov = 4,
         size = 2,
         hp = 40,
@@ -25,12 +37,12 @@ return
             "lex",
 
         },
-        shout = {
+        def_sfx = "masc_mon", 
 
-            { select = "As a river bends" },
+        -- World Map --
 
-        },
-        def_sfx = "fem", 
+        map_move = 2,
+        stack_prio = 1,
 
     },
 
@@ -38,9 +50,21 @@ return
 
     {
 
+        -- General --
+
         id = "blakber",
         name = "Black Beret",
+        start_faction = "player",
+        shout = {
+
+            { select = "Popping smoke" },
+
+        },
+
+        -- Arena --
+
         scale = 1,
+        layer = 1,
         h_mov = 4,
         size = 2,
         hp = 40,
@@ -57,20 +81,31 @@ return
             "meat",
 
         },
-        shout = {
-
-            { select = "Popping smoke" },
-
-        },
         def_sfx = "fem", 
 
+        -- World Map --
+
+        map_move = 2,
+        stack_prio = 12,
     },
 
     {
 
+        -- General -- 
+
         id = "vic",
         name = "Vicky",
+        start_faction = "player",
+        shout = {
+
+            { select = "Fully functional" },
+
+        },
+
+        -- Arena --
+
         scale = 1.1,
+        layer = 2,
         h_mov = 3,
         size = 3,
         hp = 60,
@@ -99,20 +134,31 @@ return
             "last war",
 
         },
-        shout = {
-
-            { select = "Fully functional" },
-
-        },
         def_sfx = "fem", 
 
+         -- World Map --
+
+        map_move = 2,
+        stack_prio = 10,
     },    
 
     {
 
+        -- General --
+
         id = "ifvjunk",
         name = "Antique IFV",
+        start_faction = "player",
+        shout = {
+
+            { select = "On station" },
+
+        },
+
+         -- Arena --
+
         scale = 1.9,
+        layer = 10,
         h_mov = 5,
         size = 4,
         hp = 65,
@@ -133,13 +179,12 @@ return
             "last war",
 
         },
-        shout = {
-
-            { select = "On station" },
-
-        },
         def_sfx = "expl", 
 
+        -- World Map --
+
+        map_move = 4,
+        stack_prio = 5,
     }, 
 
 }

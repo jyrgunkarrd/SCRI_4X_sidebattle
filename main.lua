@@ -1,5 +1,6 @@
 local StateController = require("src.states.state_controller")
 local WorldMap = require("src.states.world_map")
+local BattleArena = require("src.states.battle_arena")
 local MapEditor = require("src.tools.map_editor")
 
 local states
@@ -24,7 +25,16 @@ function love.load(arguments, unfilteredArguments)
         or hasArgument(unfilteredArguments, "--map-editor") then
         states:change(MapEditor.new())
     else
-        states:change(WorldMap.new())
+        states:change(WorldMap.new({
+            onCombatStart = function(encounter)
+                states:push(BattleArena.new({
+                    encounter = encounter,
+                    onBattleComplete = function(result)
+                        states:pop(result)
+                    end,
+                }))
+            end,
+        }))
     end
 end
 

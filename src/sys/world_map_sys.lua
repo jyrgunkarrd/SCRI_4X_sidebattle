@@ -1,8 +1,14 @@
 local SiteSystem = require("src.sys.site_sys")
 local SiteDraw = require("src.rndr.site_draw")
 local WorldUnitSystem = require("src.sys.world_unit_sys")
+local WorldUnitStackSystem = require("src.sys.world_ustack_sys")
 local WorldUnitDraw = require("src.rndr.world_unit_draw")
 local WorldTerrainSystem = require("src.sys.world_terrain_sys")
+local WorldResourceSystem = require("src.sys.world_res_sys")
+local WorldResourceDraw = require("src.rndr.world_res_draw")
+local WorldPathfindingSystem = require("src.sys.world_pathfinding_sys")
+local WorldMoveSystem = require("src.sys.world_move_sys")
+local WorldOverlayDraw = require("src.rndr.world_overlay_draw")
 
 local WorldMapSystem = {}
 WorldMapSystem.__index = WorldMapSystem
@@ -10,6 +16,7 @@ WorldMapSystem.__index = WorldMapSystem
 local TILE_SIZE = 96
 local TILE_CENTER_X = 48
 local TILE_CENTER_Y = 54
+local PATH_UNIT_CLEARANCE = 4
 local HEX_STEP_X = 72
 local HEX_STEP_Y = 84
 local HEX_STAGGER_Y = 42
@@ -43,6 +50,8 @@ local function roundAxial(fractionalQ, fractionalR)
     else
         roundedZ = -roundedX - roundedY
     end
+    if roundedX == 0 then roundedX = 0 end
+    if roundedZ == 0 then roundedZ = 0 end
     return roundedX, roundedZ
 end
 
@@ -62,6 +71,16 @@ local function drawOrder(left, right)
     return left.centerX < right.centerX
 end
 
+local function depthDrawOrder(left, right)
+    if left.centerY ~= right.centerY then
+        return left.centerY < right.centerY
+    end
+    if left.centerX ~= right.centerX then
+        return left.centerX < right.centerX
+    end
+    return left.localOrder < right.localOrder
+end
+
 local function loadImage(path)
     assert(love.filesystem.getInfo(path, "file"),
         ("World map image does not exist: %s"):format(path))
@@ -70,7 +89,34 @@ local function loadImage(path)
     return image
 end
 
-function WorldMapSystem.new(worldDefinition)
+local function trimPathFromUnit(pathPoints)
+    if #pathPoints < 4 then
+        return
+    end
+    local startX, startY = pathPoints[1], pathPoints[2]
+    local deltaX = pathPoints[3] - startX
+    local deltaY = pathPoints[4] - startY
+    local distance = math.sqrt(deltaX * deltaX + deltaY * deltaY)
+    if distance == 0 then
+        return
+    end
+    local boundaryScale = math.huge
+    if deltaX ~= 0 then
+        boundaryScale = math.min(boundaryScale,
+            TILE_CENTER_X / math.abs(deltaX))
+    end
+    if deltaY ~= 0 then
+        boundaryScale = math.min(boundaryScale,
+            TILE_CENTER_Y / math.abs(deltaY))
+    end
+    local clearanceScale = PATH_UNIT_CLEARANCE / distance
+    local scale = math.min(1, boundaryScale + clearanceScale)
+    pathPoints[1] = startX + deltaX * scale
+    pathPoints[2] = startY + deltaY * scale
+end
+
+function WorldMapSystem.new(worldDefinition, options)
+    options = options or {}
     assert(type(worldDefinition) == "table", "World definition must be a table")
     assert(type(worldDefinition.mapid) == "string" and worldDefinition.mapid ~= "",
         "World definition is missing a valid mapid")
@@ -79,12 +125,36 @@ function WorldMapSystem.new(worldDefinition)
     self.worldDefinition = worldDefinition
     self.map = require("assets.world." .. worldDefinition.mapid)
     self.tiles = {}
+    self.baseHexes = {}
     self:_loadTiles()
     self.siteSystem = SiteSystem.new(self.map.markers, axialToCenter)
     self.siteDraw = SiteDraw.new(self.siteSystem)
     self.worldUnitSystem = WorldUnitSystem.new(self.siteSystem)
+    self.worldUnitStackSystem = WorldUnitStackSystem.new(self.worldUnitSystem)
     self.worldUnitDraw = WorldUnitDraw.new(self.worldUnitSystem)
+    self.pathfindingSystem = WorldPathfindingSystem.new({
+        isPassable = function(q, r)
+            return self:hasBaseHex(q, r)
+        end,
+    })
+    self.worldMoveSystem = WorldMoveSystem.new(
+        self.worldUnitSystem,
+        self.worldUnitStackSystem,
+        self.pathfindingSystem,
+        axialToCenter,
+        options.combatStartSystem
+    )
+    self.worldOverlayDraw = WorldOverlayDraw.new(
+        self.worldMoveSystem,
+        axialToCenter,
+        self.worldUnitDraw
+    )
     self.worldTerrainSystem = WorldTerrainSystem.new(self.map)
+    self.worldResourceSystem = WorldResourceSystem.new(
+        self.map.markers,
+        axialToCenter
+    )
+    self.worldResourceDraw = WorldResourceDraw.new(self.worldResourceSystem)
     return self
 end
 
@@ -104,12 +174,17 @@ function WorldMapSystem:_loadTiles()
         local centerX, centerY = axialToCenter(savedTile.q, savedTile.r)
         self.tiles[#self.tiles + 1] = {
             image = image,
+            q = savedTile.q,
+            r = savedTile.r,
             layerOrder = layerOrder,
             centerX = centerX,
             centerY = centerY,
             drawX = centerX - TILE_CENTER_X,
             drawY = centerY - TILE_CENTER_Y,
         }
+        if savedTile.layer == "base" then
+            self.baseHexes[("%d:%d"):format(savedTile.q, savedTile.r)] = true
+        end
         local drawX = centerX - TILE_CENTER_X
         local drawY = centerY - TILE_CENTER_Y
         minimumX = minimumX and math.min(minimumX, drawX) or drawX
@@ -131,6 +206,63 @@ end
 
 function WorldMapSystem:getSite(id)
     return self.siteSystem:get(id)
+end
+
+function WorldMapSystem:hasBaseHex(q, r)
+    return self.baseHexes[("%d:%d"):format(q, r)] == true
+end
+
+function WorldMapSystem:worldToHex(worldX, worldY)
+    return worldToAxial(worldX, worldY)
+end
+
+function WorldMapSystem:selectUnitAtWorldPosition(worldX, worldY)
+    local q, r = worldToAxial(worldX, worldY)
+    return self.worldMoveSystem:selectAt(q, r)
+end
+
+function WorldMapSystem:deselectUnit()
+    self.worldMoveSystem:deselect()
+end
+
+function WorldMapSystem:applyCombatResult(result)
+    self.worldMoveSystem:deselect()
+    self.worldUnitSystem:applyCombatResult(result)
+    self.worldUnitStackSystem:updateVisibility()
+end
+
+function WorldMapSystem:getSelectedUnitStack()
+    return self.worldMoveSystem:getSelectedStack()
+end
+
+function WorldMapSystem:getSelectedUnitSourceStack()
+    return self.worldMoveSystem:getSourceStack()
+end
+
+function WorldMapSystem:toggleUnitInSelection(unit)
+    return self.worldMoveSystem:toggleUnitSelection(unit)
+end
+
+function WorldMapSystem:selectUnitsWithMovementRemaining()
+    return self.worldMoveSystem:selectUnitsWithMovementRemaining()
+end
+
+function WorldMapSystem:isUnitMovementActive()
+    return self.worldMoveSystem:isMoving()
+end
+
+function WorldMapSystem:moveSelectedUnitToWorldPosition(worldX, worldY)
+    local q, r = worldToAxial(worldX, worldY)
+    return self.worldMoveSystem:moveSelectedTo(q, r)
+end
+
+function WorldMapSystem:setMovementHoverAtWorldPosition(worldX, worldY)
+    local q, r = worldToAxial(worldX, worldY)
+    self.worldMoveSystem:setHoveredHex(q, r)
+end
+
+function WorldMapSystem:clearMovementHover()
+    self.worldMoveSystem:clearHoveredHex()
 end
 
 function WorldMapSystem:getFocusPosition()
@@ -157,8 +289,86 @@ function WorldMapSystem:getTerrainAtWorldPosition(worldX, worldY)
     return self.worldTerrainSystem:get(q, r), q, r
 end
 
+function WorldMapSystem:getResourceAtWorldPosition(worldX, worldY)
+    return self.worldResourceDraw:getResourceAtPoint(worldX, worldY)
+end
+
 function WorldMapSystem:update(dt)
+    self.worldMoveSystem:update(dt)
     self.worldUnitDraw:update(dt)
+end
+
+function WorldMapSystem:_getDepthSortedDrawables()
+    local drawables = {}
+    for _, tile in ipairs(self.tiles) do
+        drawables[#drawables + 1] = {
+            kind = "tile",
+            value = tile,
+            centerX = tile.centerX,
+            centerY = tile.centerY,
+            localOrder = tile.layerOrder,
+        }
+    end
+    for _, site in ipairs(self.siteSystem:getSites()) do
+        drawables[#drawables + 1] = {
+            kind = "site",
+            value = site,
+            centerX = site.centerX,
+            centerY = site.centerY,
+            localOrder = 10,
+        }
+    end
+    for _, hex in ipairs(self.worldMoveSystem:getReachableHexes()) do
+        local centerX, centerY = axialToCenter(hex.q, hex.r)
+        drawables[#drawables + 1] = {
+            kind = "movement",
+            value = hex,
+            centerX = centerX,
+            centerY = centerY,
+            localOrder = 20,
+        }
+    end
+    local preview = self.worldMoveSystem:getMovementPreview()
+    if preview then
+        local pathPoints = {}
+        local previewDepthX, previewDepthY
+        for _, pathHex in ipairs(preview.path) do
+            local pointX, pointY = axialToCenter(pathHex.q, pathHex.r)
+            pathPoints[#pathPoints + 1] = pointX
+            pathPoints[#pathPoints + 1] = pointY
+            if not previewDepthY or pointY > previewDepthY then
+                previewDepthX, previewDepthY = pointX, pointY
+            end
+        end
+        trimPathFromUnit(pathPoints)
+        drawables[#drawables + 1] = {
+            kind = "movement_path",
+            value = { points = pathPoints },
+            centerX = previewDepthX,
+            centerY = previewDepthY,
+            localOrder = 22,
+        }
+        drawables[#drawables + 1] = {
+            kind = "movement_ghost",
+            value = preview,
+            centerX = previewDepthX,
+            centerY = previewDepthY,
+            localOrder = 25,
+        }
+    end
+    for _, unit in ipairs(self.worldUnitSystem:getUnits()) do
+        if not unit.isMoving and not unit.worldStackHidden then
+            drawables[#drawables + 1] = {
+                kind = "unit",
+                value = unit,
+                centerX = unit.centerX,
+                centerY = unit.centerY,
+                localOrder = 30,
+            }
+        end
+    end
+    table.sort(drawables, depthDrawOrder)
+    return drawables
 end
 
 function WorldMapSystem:draw(cameraX, cameraY, viewportWidth, viewportHeight)
@@ -167,12 +377,30 @@ function WorldMapSystem:draw(cameraX, cameraY, viewportWidth, viewportHeight)
         math.floor(viewportWidth / 2 - cameraX),
         math.floor(viewportHeight / 2 - cameraY)
     )
-    love.graphics.setColor(1, 1, 1, 1)
-    for _, tile in ipairs(self.tiles) do
-        love.graphics.draw(tile.image, tile.drawX, tile.drawY)
+    for _, drawable in ipairs(self:_getDepthSortedDrawables()) do
+        if drawable.kind == "tile" then
+            love.graphics.setColor(1, 1, 1, 1)
+            love.graphics.draw(
+                drawable.value.image,
+                drawable.value.drawX,
+                drawable.value.drawY
+            )
+        elseif drawable.kind == "site" then
+            self.siteDraw:drawSite(drawable.value)
+        elseif drawable.kind == "movement" then
+            self.worldOverlayDraw:drawMovementHex(drawable.value)
+        elseif drawable.kind == "movement_path" then
+            self.worldOverlayDraw:drawPath(drawable.value)
+        elseif drawable.kind == "movement_ghost" then
+            self.worldOverlayDraw:drawUnitGhost(drawable.value)
+        elseif drawable.kind == "unit" then
+            self.worldUnitDraw:drawUnit(drawable.value)
+        end
     end
-    self.siteDraw:draw()
-    self.worldUnitDraw:draw()
+    love.graphics.setColor(1, 1, 1, 1)
+    self.worldUnitDraw:drawMovingUnits()
+    self.worldResourceDraw:draw()
+    self.worldOverlayDraw:drawSelection()
     love.graphics.pop()
 end
 
